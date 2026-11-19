@@ -1,4 +1,4 @@
-"""コマンドラインの入口。サブコマンドはmakeだけ(第1段)。"""
+"""コマンドラインの入口。サブコマンドはmakeとalign。"""
 
 import argparse
 import json
@@ -69,6 +69,7 @@ def build_parser():
     target.add_argument("--start", required=True, type=_time_arg, help="対象の録画の先頭の時刻")
     target.add_argument("--end", required=True, type=_time_arg, help="対象の録画の末尾の時刻")
     target.add_argument("--program-start", type=_time_arg, help="録画した放送の開始時刻(省略時は--start)")
+    target.add_argument("--wav", help="対象の音声(8kHz・16bitのWAV)。--ref-wavと一緒に使う")
     target.add_argument("--comments-file", help="ローカルのコメントファイル(XML/JKL)")
     target.add_argument("--comments-start", type=_time_arg,
                         help="コメントの時刻の基準(番組開始に当たる時刻。省略時は--program-start)")
@@ -86,6 +87,7 @@ def build_parser():
     ref.add_argument("--mode", choices=("replace", "merge"), default="replace",
                      help="replaceは基準のコメントだけ、mergeは対象の局のコメントと統合する")
     ref.add_argument("--timemap", help="基準から対象への時刻対応表(JSON)")
+    ref.add_argument("--ref-wav", help="基準の音声(8kHz・16bitのWAV)。対象の音声と照合して対応表を作る")
 
     out = make.add_argument_group("出力")
     out.add_argument("--output", action="append", type=_output_arg, required=True, metavar="WxH=PATH",
@@ -102,23 +104,33 @@ def build_parser():
 
     make.add_argument("--api-url", default=DEFAULT_API_BASE,
                       help=f"過去ログAPIのベースURL (既定: {DEFAULT_API_BASE})")
+
+    align = sub.add_parser("align", help="音声照合だけを行う(開発用)")
+    align.add_argument("--wav", required=True, help="対象の音声(8kHz・16bitのWAV)")
+    align.add_argument("--ref-wav", required=True, help="基準の音声(8kHz・16bitのWAV)")
+    align.add_argument("--report", help="結果をJSONで書き出すファイル")
     return parser
 
 
 def _validate_make(parser, args):
     if args.end <= args.start:
         parser.error("--endは--startより後にしてください")
-    if args.timemap:
+    if args.timemap and args.ref_wav:
+        parser.error("--timemapと--ref-wavは同時に指定できません")
+    if args.ref_wav and not args.wav:
+        parser.error("--ref-wavには--wavが必要です")
+    if args.timemap or args.ref_wav:
+        option = "--timemap" if args.timemap else "--ref-wav"
         if args.ref_start is None or args.ref_end is None:
-            parser.error("--timemapには--ref-startと--ref-endが必要です")
+            parser.error(f"{option}には--ref-startと--ref-endが必要です")
         if args.ref_end <= args.ref_start:
             parser.error("--ref-endは--ref-startより後にしてください")
         if args.ref_channel is None and args.ref_sid is None and not args.ref_comments_file:
-            parser.error("--timemapには--ref-sid、--ref-channel、--ref-comments-fileのどれかが必要です")
+            parser.error(f"{option}には--ref-sid、--ref-channel、--ref-comments-fileのどれかが必要です")
         if args.comments_file or args.comments_start is not None or args.comments_offset != 0:
-            parser.error("--timemapと--comments-file/--comments-start/--comments-offsetは同時に指定できません")
+            parser.error(f"{option}と--comments-file/--comments-start/--comments-offsetは同時に指定できません")
     elif args.ref_comments_file or args.ref_channel is not None or args.ref_sid is not None:
-        parser.error("基準の指定には--timemapが必要です")
+        parser.error("基準の指定には--timemapか--ref-wavが必要です")
     if args.comments_file_auto and not args.comments_file:
         parser.error("--comments-file-autoには--comments-fileが必要です")
     if args.fontsize is not None and args.fontsize <= 0:
@@ -217,13 +229,36 @@ def _make_normal(args, report):
     return fetch_api_comments(f"jk{jk}", fetch_start, fetch_end, args.api_url)
 
 
-def _make_timemap(args, report):
-    """基準の局のコメントを対応表で対象の時刻へ写す。基準の局がなければNoneを返す。"""
+def _align_audio(args, report):
+    """--wavと--ref-wavを照合して対応表を返す。失敗したら警告を出してNoneを返す。"""
     try:
-        timemap = read_timemap(args.timemap)
-    except (OSError, UnicodeError, ValueError, InvalidOperation) as error:
-        log(f"対応表の読み込み失敗: {error}")
-        raise NicoJKExit(EXIT_ERROR)
+        from .align_audio import align_audio, make_timemap
+        from .wav import read_wav
+    except ImportError as error:
+        log(f"実況音声照合に失敗したため対象局へ戻ります: numpyを読み込めません: {error}")
+        report["align"] = {"success": False, "reason": f"numpyを読み込めません: {error}", "segments": [], "seconds": 0}
+        return None
+    try:
+        target, reference = read_wav(args.wav), read_wav(args.ref_wav)
+    except (OSError, ValueError) as error:
+        log(f"実況音声照合に失敗したため対象局へ戻ります: {error}")
+        report["align"] = {"success": False, "reason": str(error), "segments": [], "seconds": 0}
+        return None
+    result = align_audio(target, reference)
+    report["align"] = {key: result[key] for key in ("success", "reason", "segments", "seconds")}
+    log(f"実況音声照合: 基準 {args.ref_wav} / 照合 {result['seconds']:.3f}秒 / 区間 {len(result['segments'])}")
+    for part in result["segments"]:
+        log(f"実況照合区間: {part['start']:.3f}～{part['end']:.3f}秒 / 基準－対象 {part['delta']:+.3f}秒 / "
+            f"プローブ{part['probes']}本 / 相関比{part['ratio']:.3f}")
+    if not result["success"]:
+        log(f"実況音声照合に失敗したため対象局へ戻ります: {result['reason']}")
+        return None
+    # 対応表の長さは、WAVの長さ(これまでのネイティブ版が渡していた録画の長さと同じ)を使う。
+    return make_timemap(result["segments"], len(target) / 8000, len(reference) / 8000)
+
+
+def _make_timemap(args, report, timemap):
+    """基準の局のコメントを対応表で対象の時刻へ写す。基準の局がなければNoneを返す。"""
     ref_start, ref_end = _normalize(args.ref_start), _normalize(args.ref_end)
 
     ref_jk = None
@@ -291,13 +326,21 @@ def run_make(args):
               "outputs": [path for _, _, path in args.output]}
     try:
         xml_str = None
+        timemap = None
         if args.timemap:
-            xml_str = _make_timemap(args, report)
-            if xml_str is None:
-                report["reference_fallback"] = True
+            try:
+                timemap = read_timemap(args.timemap)
+            except (OSError, UnicodeError, ValueError, InvalidOperation) as error:
+                log(f"対応表の読み込み失敗: {error}")
+                raise NicoJKExit(EXIT_ERROR)
+        elif args.ref_wav:
+            timemap = _align_audio(args, report)
+        if timemap is not None:
+            xml_str = _make_timemap(args, report, timemap)
         if xml_str is None:
-            if args.timemap:
+            if args.timemap or args.ref_wav:
                 # 基準を使えないときは、基準の指定を外した通常の取得に戻る。
+                report["reference_fallback"] = True
                 args.mode = "replace"
             xml_str = _make_normal(args, report)
         report["comments"] = count_chats(xml_str)
@@ -316,9 +359,41 @@ def run_make(args):
     return EXIT_SUCCESS
 
 
+def run_align(args):
+    """音声照合だけを行い、結果をJSONで出す。終了コードは成功0、照合の失敗1、その他のエラー2。"""
+    try:
+        from .align_audio import align_audio, align_result_json
+        from .wav import read_wav
+    except ImportError as error:
+        log(f"numpyを読み込めません: {error}")
+        return 2
+    try:
+        target, reference = read_wav(args.wav), read_wav(args.ref_wav)
+    except (OSError, ValueError) as error:
+        log(f"WAVを読めません: {error}")
+        return 2
+    result = align_audio(target, reference)
+    text = json.dumps(align_result_json(result, len(target) / 8000, len(reference) / 8000),
+                      ensure_ascii=False, indent=1)
+    try:
+        if args.report:
+            with open(args.report, "w", encoding="utf-8") as f:
+                f.write(text)
+        else:
+            print(text)
+    except OSError as error:
+        log(f"結果を書けません: {error}")
+        return 2
+    log(f"音声照合: {result['seconds']:.3f}秒 / 区間 {len(result['segments'])} / "
+        + ("成功" if result["success"] else "失敗: " + result["reason"]))
+    return 0 if result["success"] else 1
+
+
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command == "align":
+        return run_align(args)
     if args.command == "make":
         _validate_make(parser, args)
         try:
