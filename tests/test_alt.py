@@ -35,7 +35,10 @@ FAKE_DECODER = textwrap.dedent('''
     spec = json.load(open(ts + ".fake.json", encoding="utf-8"))
     with open(spec["argv_log"], "a", encoding="utf-8") as log:
         log.write(json.dumps(argv, ensure_ascii=False) + "\\n")
-    print("偽のデコーダー", argv[:3], file=sys.stderr)
+    print("AMT [info] 偽のデコーダー", argv[:3], file=sys.stderr)
+    print("AMT [warn] 偽の警告", file=sys.stderr)
+    for i in range(spec.get("lines", 0)):
+        print(f"AMT [info] 行 {i}", file=sys.stderr)
     if spec.get("exit"):
         sys.exit(spec["exit"])
     if spec.get("wav"):
@@ -82,11 +85,11 @@ class AltRunner(MakeRunner):
         write_wav(self.directory / "target.wav", audio)
         write_wav(self.directory / "ref.wav", np.concatenate([noise(shift, 8), audio]))
 
-    def run_alt(self, args, sid=151, wav=True, decoder_arg=True, report=True):
+    def run_alt(self, args, sid=151, wav=True, decoder_arg=True, report=True, duration=90):
         self.api_calls = []
         self.api_failure = False
         f = self.f
-        argv = ["make", "--sid", str(sid), "--start", str(TARGET), "--end", str(TARGET + 90),
+        argv = ["make", "--sid", str(sid), "--start", str(TARGET), "--end", str(TARGET + duration),
                 "--cache-dir", str(self.cache)]
         if wav:
             argv += ["--wav", str(self.directory / "target.wav")]
@@ -134,7 +137,10 @@ class AltFoundTests(AltRunner):
         self.assertTrue(report["align"]["success"])
         self.assertTrue(report["merged"])
         self.assertEqual(report["schema"], 1)
-        self.assertIn("[デコーダー] 偽のデコーダー", log)
+        # 成功したときは警告の行と1行の要約だけで、AMT [info]の行は出さない
+        self.assertIn("[デコーダー] AMT [warn] 偽の警告", log)
+        self.assertNotIn("偽のデコーダー", log)
+        self.assertIn("基準の音声をデコードしました: ゾンビさがしてます_02.ts / sid 1064 / 長さ 100.0秒 / ", log)
 
     def test_置き換えでは基準のコメントだけを使う(self):
         self.prepare_wavs()
@@ -266,7 +272,10 @@ class AltFallbackTests(AltRunner):
         self.assertIn("--wav", log)
         self.assertEqual(self.decoder_calls(), [])
         self.assertIsNotNone(report["alt"]["reference"])
-        self.assertFalse(report["decode"]["success"])
+        # 録画があっても対象の音声がなければ、最初の候補で方式Dを試す(コメントが少ないので対象局のコメントだけになる)
+        self.assertIn("方式D", log)
+        self.assertNotIn("decode", report)
+        self.assertIn("コメントが少なすぎます", report["comment_align"]["reason"])
         self.assertEqual([chat.text for chat in converted[0][3]], ["jk151のコメント"])
 
     def test_decoderがなければ警告して対象局のコメントだけ(self):
@@ -286,6 +295,17 @@ class AltFallbackTests(AltRunner):
                 self.assertFalse(report["decode"]["success"])
                 self.assertIn(reason, report["decode"]["reason"])
                 self.assertEqual([chat.text for chat in converted[0][3]], ["jk151のコメント"])
+
+    def test_デコードの失敗では要約と出力の末尾30行を出す(self):
+        self.add_recording(spec={"exit": 3, "lines": 50})
+        code, converted, log, report = self.run_alt(self.search())
+        self.assertEqual(code, 0, log)
+        self.assertIn("基準の音声のデコードに失敗しました: ゾンビさがしてます_02.ts / sid 1064 / デコーダーが終了コード3で終わりました", log)
+        self.assertIn("出力の末尾30行", log)
+        self.assertIn("行 49", log)
+        self.assertIn("行 20", log)
+        self.assertNotIn("行 19", log)
+        self.assertNotIn("基準の音声をデコードしました", log)
 
     def test_TOTがない基準は使わない(self):
         self.add_recording(spec={"json": {**REFERENCE_JSON, "start": 0, "start_rounded": 0, "has_time": False}})
@@ -390,7 +410,8 @@ class DecoderTests(AltRunner):
         self.assertEqual(info["sid"], 1064)
         self.assertEqual(info["start_rounded"], EARLIER)
         self.assertTrue(info["has_time"])
-        self.assertIn("[デコーダー] 偽のデコーダー", stderr.getvalue())
+        self.assertIn("[デコーダー] AMT [warn] 偽の警告", stderr.getvalue())
+        self.assertIn("基準の音声をデコードしました", stderr.getvalue())
 
     def test_起動できなければDecodeError(self):
         with self.assertRaises(decoder.DecodeError):

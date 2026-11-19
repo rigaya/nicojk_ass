@@ -7,10 +7,11 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 from decimal import Decimal, InvalidOperation
 
-from . import __version__, decoder, stations
+from . import __version__, align_comment, decoder, stations
 from .comments import (DEFAULT_API_BASE, EXIT_CHANNEL_NOT_FOUND, EXIT_ERROR, EXIT_SUCCESS,
                        NicoJKExit, count_chats, fetch_api_comments, fetch_target_comments,
                        file_reference, inspect_comments, log, parse_time, read_comments_file,
@@ -59,6 +60,28 @@ def _decoder_arg(value):
         raise argparse.ArgumentTypeError(str(error))
 
 
+def read_spans(path):
+    """本編の区間のJSONを読んで[(開始, 終了), ...]を返す。不正ならValueError。"""
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict) or not isinstance(data.get("spans"), list):
+        raise ValueError("spansの並びがありません")
+    spans = []
+    for item in data["spans"]:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            raise ValueError(f"区間は[開始, 終了]の形にしてください: {item!r}")
+        start, end = item
+        if isinstance(start, bool) or isinstance(end, bool) \
+                or not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
+            raise ValueError(f"区間は数値にしてください: {item!r}")
+        if not (start == start and end == end) or abs(start) == float("inf") or abs(end) == float("inf"):
+            raise ValueError(f"区間は有限の数値にしてください: {item!r}")
+        if not start < end:
+            raise ValueError(f"区間の開始は終了より前にしてください: {item!r}")
+        spans.append((float(start), float(end)))
+    return spans
+
+
 def _output_arg(value):
     match = re.fullmatch(r"(\d+)x(\d+)=(.+)", value, re.DOTALL)
     if not match or int(match.group(1)) <= 0 or int(match.group(2)) <= 0:
@@ -80,6 +103,7 @@ def build_parser():
     target.add_argument("--end", required=True, type=_time_arg, help="対象の録画の末尾の時刻")
     target.add_argument("--program-start", type=_time_arg, help="録画した放送の開始時刻(省略時は--start)")
     target.add_argument("--wav", help="対象の音声(8kHz・16bitのWAV)。--ref-wavと一緒に使う")
+    target.add_argument("--spans", help="本編の区間のJSON({\"spans\": [[開始, 終了], ...]}、対象の時刻での秒)。方式Dで使う")
     target.add_argument("--comments-file", help="ローカルのコメントファイル(XML/JKL)")
     target.add_argument("--comments-start", type=_time_arg,
                         help="コメントの時刻の基準(番組開始に当たる時刻。省略時は--program-start)")
@@ -147,6 +171,14 @@ def build_parser():
     return parser
 
 
+def _is_comment_align(args):
+    """方式D(基準の局と時刻だけを渡された)か。--altと--ref-tsは別に扱う。"""
+    if args.timemap or args.ref_wav or args.alt or args.ref_ts:
+        return False
+    return (args.ref_start is not None or args.ref_end is not None or args.ref_channel is not None
+            or args.ref_sid is not None or bool(args.ref_comments_file))
+
+
 def _validate_make(parser, args):
     if args.end <= args.start:
         parser.error("--endは--startより後にしてください")
@@ -165,9 +197,12 @@ def _validate_make(parser, args):
     args.mode = args.alt or args.mode or "replace"
     if args.ref_wav and not args.wav:
         parser.error("--ref-wavには--wavが必要です")
-    if args.timemap or args.ref_wav:
-        option = "--timemap" if args.timemap else "--ref-wav"
+    if args.timemap or args.ref_wav or _is_comment_align(args):
+        option = "--timemap" if args.timemap else "--ref-wav" if args.ref_wav else "基準の局と時刻(方式D)"
         if args.ref_start is None or args.ref_end is None:
+            if option.startswith("基準の局"):
+                parser.error("基準の指定には--timemap、--ref-wav、--ref-ts、--altのどれか、"
+                             "または--ref-startと--ref-end(方式D)が必要です")
             parser.error(f"{option}には--ref-startと--ref-endが必要です")
         if args.ref_end <= args.ref_start:
             parser.error("--ref-endは--ref-startより後にしてください")
@@ -184,8 +219,6 @@ def _validate_make(parser, args):
             parser.error("--altと--ref-comments-fileは同時に指定できません")
         if args.comments_file or args.comments_start is not None or args.comments_offset != 0:
             parser.error(f"{option}と--comments-file/--comments-start/--comments-offsetは同時に指定できません")
-    elif args.ref_comments_file or args.ref_channel is not None or args.ref_sid is not None:
-        parser.error("基準の指定には--timemap、--ref-wav、--ref-tsのどれかが必要です")
     if args.comments_file_auto and not args.comments_file:
         parser.error("--comments-file-autoには--comments-fileが必要です")
     if args.fontsize is not None and args.fontsize <= 0:
@@ -356,7 +389,7 @@ def _decode_reference(args, report, work, ts_path, sid):
     """基準のTSをデコードし、args.ref_wav・ref_start・ref_end・ref_sidを設定する。
     使えないときは理由を警告に出してFalseを返す。"""
     if not args.wav:
-        log("警告: 対象の音声(--wav)がないため基準の録画を使いません(方式Dは未対応)")
+        log("警告: 対象の音声(--wav)がないため基準の録画を使いません")
         report["decode"] = {"success": False, "reason": "--wavがありません"}
         return False
     if args.decoder is None:
@@ -385,30 +418,122 @@ def _decode_reference(args, report, work, ts_path, sid):
 
 
 def _prepare_reference(args, report, work):
-    """--altか--ref-tsの基準の録画を決めてデコードする。使えるときだけTrueを返す。"""
+    """--altか--ref-tsの基準を決める。録画をデコードして方式Aを使えるときは"audio"、
+    録画がない(または対象の音声がない)ので最初の候補で方式Dを使うときは"comment"、使えないときはNoneを返す。
+    "comment"のときは、args.ref_sid・ref_start・ref_endを最初の候補に設定する。"""
     if args.ref_ts:
         report["alt"] = None
-        return _decode_reference(args, report, work, args.ref_ts, args.ref_sid)
+        return "audio" if _decode_reference(args, report, work, args.ref_ts, args.ref_sid) else None
     if args.sid is None:
         log("警告: --altには--sidが必要です。対象の局のコメントを使います")
         report["alt"] = {"error": "--sidがありません"}
-        return False
+        return None
     plan = _alt_plan(args, args.cache_dir or default_cache_dir())
     report["alt"] = plan
-    if plan["target"]["comments"] == "unrelated":
+    unrelated = plan["target"]["comments"] == "unrelated"
+    if unrelated:
         args.mode = "replace"  # 遅れネットでは、対象の局のコメントは別の番組のもの
     reference = plan["reference"]
-    if reference is None:
-        return False
-    return _decode_reference(args, report, work, reference["path"], reference["sid"])
+    if reference is not None and args.wav:
+        return "audio" if _decode_reference(args, report, work, reference["path"], reference["sid"]) else None
+    if unrelated or not plan["candidates"]:
+        # 遅れネットでは対象の局のコメントが別の番組のものなので、方式Dは使えない。
+        if reference is not None:
+            log("警告: 対象の音声(--wav)がないため基準の録画を使いません")
+            report["decode"] = {"success": False, "reason": "--wavがありません"}
+        return None
+    first = plan["candidates"][0]
+    log(("基準の録画があっても対象の音声(--wav)がないため、" if reference is not None else "基準の録画がないため、")
+        + f"最初の候補(sid {first['sid']})のコメントで方式Dを使います")
+    args.ref_sid, args.ref_start, args.ref_end = first["sid"], first["start"], first["end"]
+    return "comment"
 
 
-def _make_timemap(args, report, timemap):
-    """基準の局のコメントを対応表で対象の時刻へ写す。基準の局がなければNoneを返す。"""
+def _align_comments(args, report, spans):
+    """方式D: 基準の局のコメントを、対象の局のコメントとの本文の一致で対象の時刻へ写す。
+    対象の局のコメントは推定にも統合にも使い、取得は1回で済ませる。
+    推定できなかったときと基準のコメントを取れないときは、対象の局のコメントだけを返す。"""
+    start, end = _normalize(args.start), _normalize(args.end)
+    program = args.program_start if args.program_start is not None else args.start
+    params = dict(align_comment.DEFAULT_PARAMS)
+    search = params["search_seconds"]
+    ref_origin = _normalize(Decimal(str(args.ref_start)) - search)
+    ref_limit = _normalize(Decimal(str(args.ref_end)) + search)
+    center = float(args.ref_start) - float(program)
+    detail = {"cm": bool(spans), "center": center, "segments": [], "seconds": 0}
+    report["comment_align"] = detail
+
+    jk, _ = _resolve_jk(args.sid, args.channel)
+    if jk is None:
+        log("対象の局に実況チャンネルがありません")
+        report["reason"] = "no_channel"
+        raise NicoJKExit(EXIT_CHANNEL_NOT_FOUND)
+    log(f"コメント取得元: API / jk{jk} / 取得範囲 {start} ～ {end} / 方式D")
+    target_xml = fetch_api_comments(f"jk{jk}", start, end, args.api_url)
+    report["fetch"] = {"channel": f"jk{jk}", "file": None, "start": start, "end": end, "relative": False}
+
+    def fall_back(reason):
+        log(f"警告: コメント照合に失敗したため対象局のコメントだけを使います: {reason}")
+        detail["reason"] = reason
+        report["source"] = "api"
+        report["reference_fallback"] = True
+        args.mode = "replace"
+        return target_xml
+
+    ref_jk = None
+    try:
+        if args.ref_comments_file:
+            reference_xml = _read_file_comments(args.ref_comments_file, ref_origin, ref_limit)
+        else:
+            ref_jk, _ = _resolve_jk(args.ref_sid, args.ref_channel)
+            if ref_jk is None:
+                return fall_back("基準の局に実況チャンネルがありません")
+            reference_xml = fetch_api_comments(f"jk{ref_jk}", ref_origin, ref_limit, args.api_url)
+        target_rows = align_comment.comments_from_xml(target_xml, float(start), float(end))
+        reference_rows = align_comment.comments_from_xml(reference_xml, float(ref_origin), float(ref_limit))
+    except (NicoJKExit, ET.ParseError, ValueError) as error:
+        return fall_back(f"基準の局のコメントを取得できません: {error}")
+    detail.update(target_comments=len(target_rows), reference_comments=len(reference_rows))
+    if not align_comment.enough_comments(target_rows, reference_rows, params):
+        return fall_back(f"コメントが少なすぎます(対象{len(target_rows)}件・基準{len(reference_rows)}件)")
+
+    began = time.perf_counter()
+    duration = float(end) - float(start)
+    vectors, index = align_comment.prepare(target_rows, reference_rows, params)
+    if spans:
+        found, _ = align_comment.find_segments_cm(vectors, index, center, float(start), duration, spans, params)
+    else:
+        found, _ = align_comment.find_segments(vectors, index, center, float(start), duration, params)
+    # 対応表の基準の時刻は、取得範囲の先頭(ref_origin)からの秒。区間のずれもその原点に直す。
+    shift = float(ref_origin) - float(start)
+    timemap = align_comment.make_timemap([dict(part, delta=part["delta"] - shift) for part in found], duration,
+                                         float(ref_limit) - float(ref_origin), params["fill"])
+    detail["seconds"] = round(time.perf_counter() - began, 3)
+    detail["segments"] = [{"start": part["start"], "end": part["end"], "delta": part["delta"],
+                           "ratio": part["ratio"], "support": part.get("support"), "windows": part.get("windows")}
+                          for part in found]
+    log(f"コメント照合: 対象{len(target_rows)}件・基準{len(reference_rows)}件 / 本編の区間 "
+        + ("あり" if spans else "なし") + f" / 照合 {detail['seconds']:.3f}秒 / 区間 {len(found)}")
+    for part in found:
+        log(f"コメント照合区間: {part['start']:.3f}～{part['end']:.3f}秒 / 基準－対象 {part['delta']:+.3f}秒 / "
+            f"山の比{part['ratio']:.2f} / 一致{part.get('support', 0)}件")
+    if not found or not timemap:
+        return fall_back("どの区間のずれも推定できませんでした")
+    return _make_timemap(args, report, timemap, "comment_align", reference_xml, target_xml)
+
+
+def _make_timemap(args, report, timemap, source="timemap", reference_xml=None, target_xml=None):
+    """基準の局のコメントを対応表で対象の時刻へ写す。基準の局がなければNoneを返す。
+    reference_xmlとtarget_xmlは、取得済みのものを渡すと取得しない(方式D)。"""
     ref_start, ref_end = _normalize(args.ref_start), _normalize(args.ref_end)
 
     ref_jk = None
-    if args.ref_comments_file:
+    if reference_xml is not None:
+        xml_str = reference_xml
+        ref_jk, _ = _resolve_jk(args.ref_sid, args.ref_channel)
+        if args.ref_comments_file:
+            ref_jk = None
+    elif args.ref_comments_file:
         xml_str = _read_file_comments(args.ref_comments_file, ref_start, ref_end)
     else:
         ref_jk, _ = _resolve_jk(args.ref_sid, args.ref_channel)
@@ -421,7 +546,7 @@ def _make_timemap(args, report, timemap):
             # 基準のコメントを取れないときは、ジョブを失敗させずに対象の局のコメントへ戻る(設計書4.2)。
             log(f"警告: 基準の局のコメントを取得できないため基準を使いません: {error}")
             return None
-    report["source"] = "timemap"
+    report["source"] = source
     report["reference"] = {"channel": f"jk{ref_jk}" if ref_jk else None,
                            "file": args.ref_comments_file, "start": ref_start, "end": ref_end}
 
@@ -430,7 +555,10 @@ def _make_timemap(args, report, timemap):
         report["merged"] = False
         if args.mode == "merge":
             jk, _ = _resolve_jk(args.sid, args.channel)
-            if jk is None:
+            if target_xml is not None:
+                xml_str = merge_comments(xml_str, target_xml, args.mark_reference_color)
+                report["merged"] = True
+            elif jk is None:
                 log("警告: 対象の局に実況チャンネルがないため基準のコメントだけを使います")
             else:
                 try:
@@ -484,6 +612,14 @@ def _run_make(args, work):
                          "program_start": args.program_start},
               "outputs": [path for _, _, path in args.output]}
     try:
+        spans = None
+        if args.spans:
+            try:
+                spans = read_spans(args.spans)
+            except (OSError, UnicodeError, ValueError) as error:
+                log(f"本編の区間を読めません: {error}")
+                raise NicoJKExit(EXIT_ERROR)
+            report["spans"] = {"count": len(spans)}
         xml_str = None
         timemap = None
         if args.timemap:
@@ -494,9 +630,14 @@ def _run_make(args, work):
                 raise NicoJKExit(EXIT_ERROR)
         elif args.ref_wav:
             timemap = _align_audio(args, report)
+        elif _is_comment_align(args):
+            xml_str = _align_comments(args, report, spans)
         elif args.alt or args.ref_ts:
-            if _prepare_reference(args, report, work):
+            method = _prepare_reference(args, report, work)
+            if method == "audio":
                 timemap = _align_audio(args, report)
+            elif method == "comment":
+                xml_str = _align_comments(args, report, spans)
         if timemap is not None:
             xml_str = _make_timemap(args, report, timemap)
         if xml_str is None:

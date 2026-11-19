@@ -10,6 +10,7 @@
 - ローカルのコメントファイル(XML、NicoJKのjkl)をASSにする(取得元の時刻合わせを含む)
 - 別の局(基準)のコメントを、時刻の対応表(`--timemap`)で対象の時刻へ写して使う、またはその局のコメントと統合する
 - 対象と基準の音声(WAV)を照合して対応表を作り、基準のコメントを写す(`--wav`、`--ref-wav`)
+- 音声がなくても、両局のコメントの本文の一致で対応表を作って写す(方式D。`--ref-sid`・`--ref-start`・`--ref-end`)
 - 先行放送・同時刻の放送の録画を、しょぼいカレンダーとフォルダから自動で探して基準にする(`--alt`)。探す処理だけを行う`plan`もある
 - 基準の録画(TS)を、外部のデコーダー(AmatsukazeCLI)で音声にして照合する(`--ref-ts`、`--decoder`)
 - 音声照合だけを行う(`align`。開発用)
@@ -17,7 +18,7 @@
 
 ## 必要なもの
 
-Python 3.10以上。音声照合(`--ref-wav`、`--alt`、`--ref-ts`、`align`)にはnumpyが要る。それ以外は標準ライブラリだけで動く。
+Python 3.10以上。音声照合(`--ref-wav`、`--alt`、`--ref-ts`、`align`)にはnumpyが要る(`--alt`で録画がないときの方式Dはnumpy不要)。それ以外は標準ライブラリだけで動く。
 
 ## 使い方
 
@@ -59,6 +60,8 @@ python3 nicojk_ass.py make --comments-file comments.xml \
 | `--ref-sid N` / `--ref-channel jkN` | 基準の局 |
 | `--ref-start T` `--ref-end T` | 基準の録画の先頭と末尾の時刻 |
 | `--wav F` `--ref-wav F` | 対象と基準の音声(16bit・8kHzのWAV。モノラルかステレオで、ステレオは平均する)。`--ref-wav`を指定すると音声照合で対応表を作る(`--timemap`とは同時に指定できない。`--wav`、`--ref-start`、`--ref-end`と、`--ref-sid`・`--ref-channel`・`--ref-comments-file`のどれかが要る)。照合に失敗したら警告を出し、基準を使わずに対象の局の通常の取得へ進む。結果は`--report`の`"align"`に入る |
+| `--ref-sid N`(または`--ref-channel jkN`) `--ref-start T` `--ref-end T` | `--timemap`・`--ref-wav`・`--alt`・`--ref-ts`がないときの方式D。基準の放送の`StTime`・`EdTime`を渡すと、前後300秒を足してコメントを取得し、対象の局のコメントとの本文の一致で時刻のずれを推定する。探索の中心は`--ref-start`と`--program-start`(省略時は`--start`)の差。コメントが少ない、またはどの区間も推定できなければ、警告を出して対象の局のコメントだけを使う。結果は`--report`の`"comment_align"`に入る |
+| `--spans F` | 本編の区間のJSON(`{"spans": [[開始, 終了], ...]}`、`--start`からの秒)。方式Dで、本編の区間ごとにずれを推定する(なければ窓ごとに推定する)。ほかの経路では読むだけで使わない。不正なら終了コード1 |
 | `--ref-comments-file F` | 基準のコメントファイル(指定すればAPIは使わない) |
 | `--mode replace\|merge` | `replace`は基準のコメントだけ、`merge`は対象の局のコメントと統合する(既定は`replace`) |
 | `--alt replace\|merge` | 先行放送・同時刻の放送の録画を`--search-dir`から探して基準にする。`--mode`の代わりに、この値を使う。`--sid`が要る |

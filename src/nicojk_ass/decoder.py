@@ -1,7 +1,9 @@
 """デコーダーの呼び出し(設計書4.5)。TSの主音声をWAVにする。第3段は--decoder amatsukaze=<パス>だけ。"""
 
+import collections
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -21,9 +23,15 @@ def parse_decoder(value):
     return kind, path
 
 
+# AmatsukazeCLIの出力は「AMT [info] ...」の形で、警告とエラーだけをログに残す。
+_PROBLEM_LINE = re.compile(r"^AMT \[(warn|warning|error|fatal)\]", re.IGNORECASE)
+TAIL_LINES = 30
+
+
 def decode_amatsukaze(exe, ts_path, sid, wav_path):
     """`<exe> --mode nicojk_wav -i <TS> [-s <ServiceId>] -o <WAV>`を実行し、WAVのJSONの内容を返す。
-    子プロセスの出力は、nicojk_assのログ(標準エラー)へ流す。失敗したらDecodeErrorを送出する。
+    子プロセスの出力は、成功したときは警告・エラーの行と1行の要約だけ、失敗したときは要約と末尾30行を
+    nicojk_assのログ(標準エラー)へ出す。失敗したらDecodeErrorを送出する。
     exeが.pyで終わるときはPythonで動かす(テストの偽のデコーダー用)。"""
     command = [sys.executable, exe] if exe.lower().endswith(".py") else [exe]
     command += ["--mode", "nicojk_wav", "-i", ts_path]
@@ -33,19 +41,32 @@ def decode_amatsukaze(exe, ts_path, sid, wav_path):
     json_path = wav_path + ".json"
     if os.path.exists(json_path):
         os.unlink(json_path)  # 前回の結果を読まないようにする
-    log("デコード: " + " ".join(command))
     began = time.monotonic()
+    name = os.path.basename(ts_path)
+    lines = collections.deque(maxlen=TAIL_LINES)  # 失敗したときに出す末尾だけを持つ
+
+    def fail(reason):
+        log(f"基準の音声のデコードに失敗しました: {name} / sid {sid} / {reason}")
+        log("デコード: " + " ".join(command))
+        if lines:
+            log(f"[デコーダー] 出力の末尾{len(lines)}行:")
+            for text in lines:
+                log("[デコーダー] " + text)
+        raise DecodeError(reason)
+
     try:
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     except OSError as error:
-        raise DecodeError(f"デコーダーを起動できません: {error}")
+        fail(f"デコーダーを起動できません: {error}")
     for line in process.stdout:
         text = line.decode("utf-8", "replace").rstrip("\r\n")
         if text:
-            log("[デコーダー] " + text)
+            lines.append(text)
+            if _PROBLEM_LINE.match(text):
+                log("[デコーダー] " + text)
     code = process.wait()
     if code != 0:
-        raise DecodeError(f"デコーダーが終了コード{code}で終わりました")
+        fail(f"デコーダーが終了コード{code}で終わりました")
     try:
         with open(json_path, "r", encoding="utf-8") as file:
             info = json.load(file)
@@ -53,8 +74,10 @@ def decode_amatsukaze(exe, ts_path, sid, wav_path):
                   "end": float(info["end"]), "duration": float(info["duration"]),
                   "has_time": bool(info["has_time"]), "sid": int(info["sid"])}
     except (OSError, ValueError, KeyError, TypeError) as error:
-        raise DecodeError(f"デコーダーの結果のJSONを読めません: {error}")
+        fail(f"デコーダーの結果のJSONを読めません: {error}")
     if not os.path.exists(wav_path):
-        raise DecodeError("デコーダーがWAVを書きませんでした")
+        fail("デコーダーがWAVを書きませんでした")
     result["seconds"] = round(time.monotonic() - began, 3)
+    log(f"基準の音声をデコードしました: {name} / sid {result['sid']} / 長さ {result['duration']:.1f}秒 / "
+        f"{result['seconds']:.1f}秒")
     return result
