@@ -419,8 +419,8 @@ def _decode_reference(args, report, work, ts_path, sid):
 
 def _prepare_reference(args, report, work):
     """--altか--ref-tsの基準を決める。録画をデコードして方式Aを使えるときは"audio"、
-    録画がない(または対象の音声がない)ので最初の候補で方式Dを使うときは"comment"、使えないときはNoneを返す。
-    "comment"のときは、args.ref_sid・ref_start・ref_endを最初の候補に設定する。"""
+    録画がない(または対象の音声がない)ので候補のコメントで方式Dを使うときは"comment"、使えないときはNoneを返す。
+    "comment"のときは、args.ref_candidatesに候補(放送の早い順)を設定する。"""
     if args.ref_ts:
         report["alt"] = None
         return "audio" if _decode_reference(args, report, work, args.ref_ts, args.ref_sid) else None
@@ -442,10 +442,9 @@ def _prepare_reference(args, report, work):
             log("警告: 対象の音声(--wav)がないため基準の録画を使いません")
             report["decode"] = {"success": False, "reason": "--wavがありません"}
         return None
-    first = plan["candidates"][0]
     log(("基準の録画があっても対象の音声(--wav)がないため、" if reference is not None else "基準の録画がないため、")
-        + f"最初の候補(sid {first['sid']})のコメントで方式Dを使います")
-    args.ref_sid, args.ref_start, args.ref_end = first["sid"], first["start"], first["end"]
+        + "候補のコメントで方式Dを使います")
+    args.ref_candidates = plan["candidates"]
     return "comment"
 
 
@@ -457,10 +456,7 @@ def _align_comments(args, report, spans):
     program = args.program_start if args.program_start is not None else args.start
     params = dict(align_comment.DEFAULT_PARAMS)
     search = params["search_seconds"]
-    ref_origin = _normalize(Decimal(str(args.ref_start)) - search)
-    ref_limit = _normalize(Decimal(str(args.ref_end)) + search)
-    center = float(args.ref_start) - float(program)
-    detail = {"cm": bool(spans), "center": center, "segments": [], "seconds": 0}
+    detail = {"cm": bool(spans), "segments": [], "seconds": 0, "candidates": []}
     report["comment_align"] = detail
 
     jk, _ = _resolve_jk(args.sid, args.channel)
@@ -471,6 +467,11 @@ def _align_comments(args, report, spans):
     log(f"コメント取得元: API / jk{jk} / 取得範囲 {start} ～ {end} / 方式D")
     target_xml = fetch_api_comments(f"jk{jk}", start, end, args.api_url)
     report["fetch"] = {"channel": f"jk{jk}", "file": None, "start": start, "end": end, "relative": False}
+    try:
+        target_rows = align_comment.comments_from_xml(target_xml, float(start), float(end))
+    except (ET.ParseError, ValueError) as error:
+        log(f"コメントの読み込み失敗: {error}")
+        raise NicoJKExit(EXIT_ERROR)
 
     def fall_back(reason):
         log(f"警告: コメント照合に失敗したため対象局のコメントだけを使います: {reason}")
@@ -480,22 +481,52 @@ def _align_comments(args, report, spans):
         args.mode = "replace"
         return target_xml
 
-    ref_jk = None
-    try:
-        if args.ref_comments_file:
-            reference_xml = _read_file_comments(args.ref_comments_file, ref_origin, ref_limit)
-        else:
-            ref_jk, _ = _resolve_jk(args.ref_sid, args.ref_channel)
-            if ref_jk is None:
-                return fall_back("基準の局に実況チャンネルがありません")
-            reference_xml = fetch_api_comments(f"jk{ref_jk}", ref_origin, ref_limit, args.api_url)
-        target_rows = align_comment.comments_from_xml(target_xml, float(start), float(end))
-        reference_rows = align_comment.comments_from_xml(reference_xml, float(ref_origin), float(ref_limit))
-    except (NicoJKExit, ET.ParseError, ValueError) as error:
-        return fall_back(f"基準の局のコメントを取得できません: {error}")
-    detail.update(target_comments=len(target_rows), reference_comments=len(reference_rows))
-    if not align_comment.enough_comments(target_rows, reference_rows, params):
-        return fall_back(f"コメントが少なすぎます(対象{len(target_rows)}件・基準{len(reference_rows)}件)")
+    if len(target_rows) < params["min_comments"]:
+        # 対象の局のコメントが足りなければ、どの候補でも推定できないので基準のコメントを取りに行かない。
+        detail["target_comments"] = len(target_rows)
+        return fall_back(f"対象の局のコメントが少なすぎます({len(target_rows)}件)")
+    # --altでは、候補を放送の早い順に見て、基準のコメントが十分にある最初の候補で推定する。
+    # 直接指定(--ref-sidなど)の候補は1つだけ。
+    candidates = getattr(args, "ref_candidates", None)
+    if candidates is None:
+        candidates = [{"sid": args.ref_sid, "start": args.ref_start, "end": args.ref_end}]
+    skipped = []
+    reference_xml = None
+    for candidate in candidates:
+        args.ref_sid, args.ref_start, args.ref_end = candidate["sid"], candidate["start"], candidate["end"]
+        ref_origin = _normalize(Decimal(str(args.ref_start)) - search)
+        ref_limit = _normalize(Decimal(str(args.ref_end)) + search)
+        entry = {"sid": args.ref_sid, "start": args.ref_start, "end": args.ref_end, "skipped": None}
+        detail["candidates"].append(entry)
+        reason = None
+        try:
+            if args.ref_comments_file:
+                reference_xml = _read_file_comments(args.ref_comments_file, ref_origin, ref_limit)
+            else:
+                ref_jk, _ = _resolve_jk(args.ref_sid, args.ref_channel)
+                if ref_jk is None:
+                    reason = "基準の局に実況チャンネルがありません"
+                else:
+                    reference_xml = fetch_api_comments(f"jk{ref_jk}", ref_origin, ref_limit, args.api_url)
+            if reason is None:
+                reference_rows = align_comment.comments_from_xml(reference_xml, float(ref_origin), float(ref_limit))
+                entry["comments"] = len(reference_rows)
+                if not align_comment.enough_comments(target_rows, reference_rows, params):
+                    reason = f"コメントが少なすぎます(対象{len(target_rows)}件・基準{len(reference_rows)}件)"
+        except (NicoJKExit, ET.ParseError, ValueError) as error:
+            reason = f"基準の局のコメントを取得できません: {error}"
+        if reason is None:
+            break
+        entry["skipped"] = reason
+        skipped.append(reason)
+        reference_xml = None
+        if len(candidates) > 1:
+            log(f"方式D: 候補 sid {args.ref_sid} を飛ばします: {reason}")
+    if reference_xml is None:
+        return fall_back("; ".join(skipped))
+    center = float(args.ref_start) - float(program)
+    detail.update(center=center, target_comments=len(target_rows), reference_comments=len(reference_rows),
+                  reference={"sid": args.ref_sid, "start": args.ref_start, "end": args.ref_end})
 
     began = time.perf_counter()
     duration = float(end) - float(start)

@@ -73,6 +73,12 @@ class Api:
         return packet(self.rows.get(channel, []), start, end)
 
 
+def finder_item(start):
+    from finder_fixture import program
+    import xml.etree.ElementTree as ET
+    return ET.tostring(program(8028, 20, "2", start), encoding="unicode")
+
+
 def texts(converted):
     return [chat.text for chat in converted[0][3]]
 
@@ -244,11 +250,18 @@ class AltTests(AltRunner):
     def setUp(self):
         super().setUp()
         self.target_rows, self.reference_rows = synthesize(TARGET, EARLIER - TARGET, 1800)
+        self.atx_rows = []
 
     def api(self, channel, start, end, api_base):
         self.api_calls.append((channel, start, end))
-        rows = {"jk151": self.target_rows, "jk5": self.reference_rows}.get(channel, [])
+        rows = {"jk151": self.target_rows, "jk5": self.reference_rows, "jk333": self.atx_rows}.get(channel, [])
         return packet(rows, start, end)
+
+    def add_atx_first(self, comments):
+        """AT-X(jk333)の放送を、テレ朝より早い最初の候補にする。コメントはcomments件。"""
+        self.f.episodes = self.f.episodes.replace(
+            "</ProgItems>", finder_item("2026-10-10 23:00:00") + "</ProgItems>")
+        self.atx_rows = self.reference_rows[:comments]
 
     def test_録画がなければ最初の候補のコメントで方式D(self):
         code, converted, log, report = self.run_alt(self.search(), duration=1800)
@@ -270,6 +283,45 @@ class AltTests(AltRunner):
         self.assertEqual(self.decoder_calls(), [])
         self.assertEqual(report["source"], "comment_align")
         self.assertIsNotNone(report["alt"]["reference"])
+
+    def test_最初の候補のコメントが少なければ次の候補で推定する(self):
+        self.add_atx_first(1)
+        code, converted, log, report = self.run_alt(self.search(), duration=1800)
+        self.assertEqual(code, 0, log)
+        detail = report["comment_align"]
+        self.assertEqual([c["sid"] for c in detail["candidates"]], [333, 1064])
+        self.assertIn("コメントが少なすぎます", detail["candidates"][0]["skipped"])
+        self.assertIsNone(detail["candidates"][1]["skipped"])
+        self.assertEqual(report["reference"]["channel"], "jk5")
+        self.assertEqual(detail["reference"]["sid"], 1064)
+        self.assertEqual(detail["center"], EARLIER - TARGET)
+        self.assertIn("方式D: 候補 sid 333 を飛ばします", log)
+        self.assertGreaterEqual(len(detail["segments"]), 1)
+        self.assertEqual([c[0] for c in self.api_calls], ["jk151", "jk333", "jk5"])  # 対象は1回だけ
+
+    def test_どの候補もコメントが足りなければ対象局のコメントだけ(self):
+        self.add_atx_first(1)
+        self.reference_rows = self.reference_rows[:5]
+        code, converted, log, report = self.run_alt(self.search(), duration=1800)
+        self.assertEqual(code, 0, log)
+        detail = report["comment_align"]
+        self.assertEqual([c["sid"] for c in detail["candidates"]], [333, 1064])
+        self.assertTrue(all(c["skipped"] for c in detail["candidates"]))
+        self.assertTrue(report["reference_fallback"])
+        self.assertTrue(all(t.endswith("ｗｗｗ") or t == "草" for t in texts(converted)))
+
+    def test_最初の候補で区間がなければ次の候補へは進まない(self):
+        self.add_atx_first(5000)  # 件数は足りるが、時刻が合わないので一致しない
+        rng = random.Random(3)
+        self.atx_rows = [(s, "".join(rng.choice(KANJI) for _ in range(6))) for s, _ in self.reference_rows]
+        code, converted, log, report = self.run_alt(self.search(), duration=1800)
+        self.assertEqual(code, 0, log)
+        detail = report["comment_align"]
+        self.assertEqual([c["sid"] for c in detail["candidates"]], [333])
+        self.assertEqual(detail["segments"], [])
+        self.assertIn("推定できませんでした", detail["reason"])
+        self.assertNotIn("jk5", [c[0] for c in self.api_calls])
+        self.assertTrue(report["reference_fallback"])
 
     def test_遅れネットでは方式Dを使わず終了コード100(self):
         self.f.set_affiliate()
