@@ -1,21 +1,24 @@
-"""コマンドラインの入口。サブコマンドはmakeとalign。"""
+"""コマンドラインの入口。サブコマンドはmake、plan、align。"""
 
 import argparse
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
 from decimal import Decimal, InvalidOperation
 
-from . import __version__, stations
+from . import __version__, decoder, stations
 from .comments import (DEFAULT_API_BASE, EXIT_CHANNEL_NOT_FOUND, EXIT_ERROR, EXIT_SUCCESS,
                        NicoJKExit, count_chats, fetch_api_comments, fetch_target_comments,
                        file_reference, inspect_comments, log, parse_time, read_comments_file,
                        rebase_file_vpos)
+from .finder import Finder
 from .render import (DEFAULT_DURATION, DEFAULT_FONT, DEFAULT_OPACITY, default_fontsize,
                      fixup_ass, run_danmaku2ass)
+from .syoboi import SyoboiClient, default_cache_dir
 from .timemap import apply_timemap, merge_comments, read_timemap
 
 REPORT_SCHEMA = 1
@@ -47,6 +50,13 @@ def _channel_arg(value):
     if not text.isdigit() or int(text) <= 0:
         raise argparse.ArgumentTypeError("実況チャンネルはjkN(Nは正の整数)で指定してください")
     return int(text)
+
+
+def _decoder_arg(value):
+    try:
+        return decoder.parse_decoder(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error))
 
 
 def _output_arg(value):
@@ -84,8 +94,16 @@ def build_parser():
     ref.add_argument("--ref-start", type=_time_arg, help="基準の録画の先頭の時刻")
     ref.add_argument("--ref-end", type=_time_arg, help="基準の録画の末尾の時刻")
     ref.add_argument("--ref-comments-file", help="基準のコメントファイル(XML/JKL)")
-    ref.add_argument("--mode", choices=("replace", "merge"), default="replace",
-                     help="replaceは基準のコメントだけ、mergeは対象の局のコメントと統合する")
+    ref.add_argument("--alt", choices=("replace", "merge"),
+                     help="先行放送・同時刻の放送の録画を--search-dirから探して基準にする"
+                          "(replaceは基準のコメントだけ、mergeは対象の局のコメントと統合する)")
+    ref.add_argument("--search-dir", action="append", default=[], metavar="DIR",
+                     help="--altで録画を探すフォルダ(繰り返し可。サブフォルダは見ない)")
+    ref.add_argument("--exclude", action="append", default=[], metavar="FILE",
+                     help="--altで探す対象から除くファイル(対象の録画自身。繰り返し可)")
+    ref.add_argument("--ref-ts", help="基準の録画(TS)。デコードして音声照合する")
+    ref.add_argument("--mode", choices=("replace", "merge"),
+                     help="replaceは基準のコメントだけ、mergeは対象の局のコメントと統合する(既定はreplace)")
     ref.add_argument("--timemap", help="基準から対象への時刻対応表(JSON)")
     ref.add_argument("--ref-wav", help="基準の音声(8kHz・16bitのWAV)。対象の音声と照合して対応表を作る")
 
@@ -104,6 +122,23 @@ def build_parser():
 
     make.add_argument("--api-url", default=DEFAULT_API_BASE,
                       help=f"過去ログAPIのベースURL (既定: {DEFAULT_API_BASE})")
+    make.add_argument("--decoder", type=_decoder_arg, metavar="amatsukaze=PATH",
+                      help="基準の録画の音声をデコードするプログラム")
+    make.add_argument("--cache-dir", help="しょぼいカレンダーの応答とTSの見出しのキャッシュの置き場所"
+                                          "(既定は利用者ごとのキャッシュのフォルダ)")
+    make.add_argument("--work-dir", help="デコードしたWAVの置き場所(既定はOSの一時フォルダに作り、終わったら消す)")
+    make.add_argument("--keep-work", action="store_true", help="デコードしたWAVを残す(調査用)")
+
+    plan = sub.add_parser("plan", help="先行放送の録画を探す処理だけを行い、結果をJSONで出す(デコードと照合はしない)")
+    plan.add_argument("--sid", type=int, help="対象の局のServiceId")
+    plan.add_argument("--channel", type=_channel_arg, help="対象の実況チャンネル(放送の特定にはServiceIdが要る)")
+    plan.add_argument("--start", required=True, type=_time_arg, help="対象の録画の先頭の時刻")
+    plan.add_argument("--end", type=_time_arg, help="対象の録画の末尾の時刻")
+    plan.add_argument("--program-start", type=_time_arg, help="録画した放送の開始時刻(省略時は--start)")
+    plan.add_argument("--search-dir", action="append", default=[], metavar="DIR", help="録画を探すフォルダ(繰り返し可)")
+    plan.add_argument("--exclude", action="append", default=[], metavar="FILE", help="探す対象から除くファイル(繰り返し可)")
+    plan.add_argument("--cache-dir", help="キャッシュの置き場所")
+    plan.add_argument("--report", help="結果を書き出すファイル(省略時は標準出力)")
 
     align = sub.add_parser("align", help="音声照合だけを行う(開発用)")
     align.add_argument("--wav", required=True, help="対象の音声(8kHz・16bitのWAV)")
@@ -117,6 +152,17 @@ def _validate_make(parser, args):
         parser.error("--endは--startより後にしてください")
     if args.timemap and args.ref_wav:
         parser.error("--timemapと--ref-wavは同時に指定できません")
+    if args.alt and args.mode:
+        parser.error("--altと--modeは同時に指定できません(--altの値が使われます)")
+    if args.alt and args.ref_ts:
+        parser.error("--altと--ref-tsは同時に指定できません")
+    if (args.alt or args.ref_ts) and (args.timemap or args.ref_wav):
+        parser.error("--alt/--ref-tsと--timemap/--ref-wavは同時に指定できません")
+    if args.alt and not args.search_dir:
+        parser.error("--altには--search-dirが必要です")
+    if (args.search_dir or args.exclude) and not args.alt:
+        parser.error("--search-dir/--excludeには--altが必要です")
+    args.mode = args.alt or args.mode or "replace"
     if args.ref_wav and not args.wav:
         parser.error("--ref-wavには--wavが必要です")
     if args.timemap or args.ref_wav:
@@ -129,8 +175,17 @@ def _validate_make(parser, args):
             parser.error(f"{option}には--ref-sid、--ref-channel、--ref-comments-fileのどれかが必要です")
         if args.comments_file or args.comments_start is not None or args.comments_offset != 0:
             parser.error(f"{option}と--comments-file/--comments-start/--comments-offsetは同時に指定できません")
+    elif args.alt or args.ref_ts:
+        option = "--alt" if args.alt else "--ref-ts"
+        if args.ref_start is not None or args.ref_end is not None or args.ref_channel is not None \
+                or (args.alt and args.ref_sid is not None):
+            parser.error(f"{option}と--ref-start/--ref-end/--ref-channel(--altでは--ref-sidも)は同時に指定できません")
+        if args.ref_comments_file and args.alt:
+            parser.error("--altと--ref-comments-fileは同時に指定できません")
+        if args.comments_file or args.comments_start is not None or args.comments_offset != 0:
+            parser.error(f"{option}と--comments-file/--comments-start/--comments-offsetは同時に指定できません")
     elif args.ref_comments_file or args.ref_channel is not None or args.ref_sid is not None:
-        parser.error("基準の指定には--timemapか--ref-wavが必要です")
+        parser.error("基準の指定には--timemap、--ref-wav、--ref-tsのどれかが必要です")
     if args.comments_file_auto and not args.comments_file:
         parser.error("--comments-file-autoには--comments-fileが必要です")
     if args.fontsize is not None and args.fontsize <= 0:
@@ -257,6 +312,97 @@ def _align_audio(args, report):
     return make_timemap(result["segments"], len(target) / 8000, len(reference) / 8000)
 
 
+class WorkDir:
+    """デコードしたWAVの置き場所。--work-dirがなければ、OSの一時フォルダに作って終わったら消す。
+    --work-dirがあれば、そこへ書いた自分のファイルだけを終わったら消す。--keep-workなら何も消さない。"""
+
+    def __init__(self, path, keep):
+        self.path = path
+        self.keep = keep
+        self.created = False
+        self.files = []
+
+    def file(self, name):
+        if self.path is None:
+            self.path = tempfile.mkdtemp(prefix="nicojk_ass_")
+            self.created = True
+        else:
+            os.makedirs(self.path, exist_ok=True)
+        path = os.path.join(self.path, name)
+        self.files += [path, path + ".json"]
+        return path
+
+    def close(self):
+        if self.keep:
+            return
+        if self.created:
+            shutil.rmtree(self.path, ignore_errors=True)
+            return
+        for path in self.files:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+
+def _alt_plan(args, cache_dir):
+    """--altの放送の特定と録画の探索(decodeと照合はしない)。planの辞書を返す。"""
+    program_start = args.program_start if args.program_start is not None else args.start
+    finder = Finder(cache_dir, SyoboiClient(cache_dir, log=lambda m: log(m)), log=log)
+    return finder.find(args.sid, float(program_start), args.search_dir, args.exclude)
+
+
+def _decode_reference(args, report, work, ts_path, sid):
+    """基準のTSをデコードし、args.ref_wav・ref_start・ref_end・ref_sidを設定する。
+    使えないときは理由を警告に出してFalseを返す。"""
+    if not args.wav:
+        log("警告: 対象の音声(--wav)がないため基準の録画を使いません(方式Dは未対応)")
+        report["decode"] = {"success": False, "reason": "--wavがありません"}
+        return False
+    if args.decoder is None:
+        log("警告: --decoderがないため基準の録画をデコードできません")
+        report["decode"] = {"success": False, "reason": "--decoderがありません"}
+        return False
+    wav = work.file("reference.wav")
+    try:
+        info = decoder.decode_amatsukaze(args.decoder[1], ts_path, sid, wav)
+    except decoder.DecodeError as error:
+        log(f"警告: 基準の録画のデコードに失敗しました: {error}")
+        report["decode"] = {"success": False, "reason": str(error), "ts": ts_path}
+        return False
+    report["decode"] = {"success": True, "ts": ts_path, "wav": wav, **info}
+    if not info["has_time"]:
+        log("警告: 基準の録画にTOTがなく先頭の時刻を求められないため基準を使いません")
+        report["decode"]["success"] = False
+        report["decode"]["reason"] = "TOTがありません"
+        return False
+    # 今のAmatsukazeの方式Aと同じ値: 丸めた先頭の時刻と、そこから音声の長さ分
+    args.ref_wav = wav
+    args.ref_start = _normalize(info["start_rounded"])
+    args.ref_end = _normalize(info["start_rounded"] + info["duration"])
+    args.ref_sid = info["sid"]
+    return True
+
+
+def _prepare_reference(args, report, work):
+    """--altか--ref-tsの基準の録画を決めてデコードする。使えるときだけTrueを返す。"""
+    if args.ref_ts:
+        report["alt"] = None
+        return _decode_reference(args, report, work, args.ref_ts, args.ref_sid)
+    if args.sid is None:
+        log("警告: --altには--sidが必要です。対象の局のコメントを使います")
+        report["alt"] = {"error": "--sidがありません"}
+        return False
+    plan = _alt_plan(args, args.cache_dir or default_cache_dir())
+    report["alt"] = plan
+    if plan["target"]["comments"] == "unrelated":
+        args.mode = "replace"  # 遅れネットでは、対象の局のコメントは別の番組のもの
+    reference = plan["reference"]
+    if reference is None:
+        return False
+    return _decode_reference(args, report, work, reference["path"], reference["sid"])
+
+
 def _make_timemap(args, report, timemap):
     """基準の局のコメントを対応表で対象の時刻へ写す。基準の局がなければNoneを返す。"""
     ref_start, ref_end = _normalize(args.ref_start), _normalize(args.ref_end)
@@ -269,7 +415,12 @@ def _make_timemap(args, report, timemap):
         if ref_jk is None:
             log("警告: 基準の局に実況チャンネルがないため基準を使いません")
             return None
-        xml_str = fetch_api_comments(f"jk{ref_jk}", ref_start, ref_end, args.api_url)
+        try:
+            xml_str = fetch_api_comments(f"jk{ref_jk}", ref_start, ref_end, args.api_url)
+        except (NicoJKExit, ET.ParseError, ValueError) as error:
+            # 基準のコメントを取れないときは、ジョブを失敗させずに対象の局のコメントへ戻る(設計書4.2)。
+            log(f"警告: 基準の局のコメントを取得できないため基準を使いません: {error}")
+            return None
     report["source"] = "timemap"
     report["reference"] = {"channel": f"jk{ref_jk}" if ref_jk else None,
                            "file": args.ref_comments_file, "start": ref_start, "end": ref_end}
@@ -319,6 +470,14 @@ def _render_outputs(args, xml_str):
 
 
 def run_make(args):
+    work = WorkDir(args.work_dir, args.keep_work)
+    try:
+        return _run_make(args, work)
+    finally:
+        work.close()
+
+
+def _run_make(args, work):
     report = {"schema": REPORT_SCHEMA, "version": __version__, "exit_code": EXIT_SUCCESS,
               "target": {"sid": args.sid, "channel": f"jk{args.channel}" if args.channel else None,
                          "start": args.start, "end": args.end,
@@ -335,10 +494,18 @@ def run_make(args):
                 raise NicoJKExit(EXIT_ERROR)
         elif args.ref_wav:
             timemap = _align_audio(args, report)
+        elif args.alt or args.ref_ts:
+            if _prepare_reference(args, report, work):
+                timemap = _align_audio(args, report)
         if timemap is not None:
             xml_str = _make_timemap(args, report, timemap)
         if xml_str is None:
-            if args.timemap or args.ref_wav:
+            if (report.get("alt") or {}).get("target", {}).get("comments") == "unrelated":
+                # 遅れネット・独自枠で基準を使えないとき、対象の局のコメントは別の番組のものなので付けない。
+                log("遅れネット・独自枠で基準の録画を使えないため実況を付けません")
+                report["reason"] = "unrelated_no_reference"
+                raise NicoJKExit(EXIT_CHANNEL_NOT_FOUND)
+            if args.timemap or args.ref_wav or args.alt or args.ref_ts:
                 # 基準を使えないときは、基準の指定を外した通常の取得に戻る。
                 report["reference_fallback"] = True
                 args.mode = "replace"
@@ -357,6 +524,27 @@ def run_make(args):
             except OSError as error:
                 log(f"レポートを書けません: {error}")
     return EXIT_SUCCESS
+
+
+def run_plan(args):
+    """先行放送の録画を探す処理だけを行い、結果をJSONで出す。終了コードは0(見つからなくても0)、エラーは1。"""
+    if args.sid is None:
+        log("警告: --sidがないため放送を特定できません")
+    program_start = args.program_start if args.program_start is not None else args.start
+    cache_dir = args.cache_dir or default_cache_dir()
+    finder = Finder(cache_dir, SyoboiClient(cache_dir, log=lambda m: log(m)), log=log)
+    plan = finder.find(args.sid, float(program_start), args.search_dir, args.exclude)
+    text = json.dumps(plan, ensure_ascii=False, indent=1)
+    try:
+        if args.report:
+            with open(args.report, "w", encoding="utf-8") as f:
+                f.write(text)
+        else:
+            print(text)
+    except OSError as error:
+        log(f"結果を書けません: {error}")
+        return 1
+    return 0
 
 
 def run_align(args):
@@ -394,6 +582,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.command == "align":
         return run_align(args)
+    if args.command == "plan":
+        return run_plan(args)
     if args.command == "make":
         _validate_make(parser, args)
         try:

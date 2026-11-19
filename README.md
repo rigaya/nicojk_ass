@@ -4,18 +4,20 @@
 
 過去ログは [ニコニコ実況 過去ログ API](https://jikkyo.tsukumijima.net)(個人運営)から取得する。負荷をかけないよう、短い間隔で繰り返し呼ばないこと。
 
-この版(第2段)でできること:
+この版(第3段)でできること:
 
 - 局(ServiceIdまたはjk番号)と時刻の範囲を指定して、コメントを取得してASSにする
 - ローカルのコメントファイル(XML、NicoJKのjkl)をASSにする(取得元の時刻合わせを含む)
 - 別の局(基準)のコメントを、時刻の対応表(`--timemap`)で対象の時刻へ写して使う、またはその局のコメントと統合する
 - 対象と基準の音声(WAV)を照合して対応表を作り、基準のコメントを写す(`--wav`、`--ref-wav`)
+- 先行放送・同時刻の放送の録画を、しょぼいカレンダーとフォルダから自動で探して基準にする(`--alt`)。探す処理だけを行う`plan`もある
+- 基準の録画(TS)を、外部のデコーダー(AmatsukazeCLI)で音声にして照合する(`--ref-ts`、`--decoder`)
 - 音声照合だけを行う(`align`。開発用)
 - 1回の実行で複数の解像度のASSを出力する
 
 ## 必要なもの
 
-Python 3.10以上。音声照合(`--ref-wav`、`align`)にはnumpyが要る。それ以外は標準ライブラリだけで動く。
+Python 3.10以上。音声照合(`--ref-wav`、`--alt`、`--ref-ts`、`align`)にはnumpyが要る。それ以外は標準ライブラリだけで動く。
 
 ## 使い方
 
@@ -59,6 +61,21 @@ python3 nicojk_ass.py make --comments-file comments.xml \
 | `--wav F` `--ref-wav F` | 対象と基準の音声(16bit・8kHzのWAV。モノラルかステレオで、ステレオは平均する)。`--ref-wav`を指定すると音声照合で対応表を作る(`--timemap`とは同時に指定できない。`--wav`、`--ref-start`、`--ref-end`と、`--ref-sid`・`--ref-channel`・`--ref-comments-file`のどれかが要る)。照合に失敗したら警告を出し、基準を使わずに対象の局の通常の取得へ進む。結果は`--report`の`"align"`に入る |
 | `--ref-comments-file F` | 基準のコメントファイル(指定すればAPIは使わない) |
 | `--mode replace\|merge` | `replace`は基準のコメントだけ、`merge`は対象の局のコメントと統合する(既定は`replace`) |
+| `--alt replace\|merge` | 先行放送・同時刻の放送の録画を`--search-dir`から探して基準にする。`--mode`の代わりに、この値を使う。`--sid`が要る |
+| `--search-dir D` `--exclude F` | `--alt`で録画を探すフォルダ(サブフォルダは見ない。繰り返し可)と、探す対象から除くファイル(対象の録画自身) |
+| `--ref-ts F` | 基準の録画(TS)を手で指定する。デコードして音声照合する。`--ref-sid`でServiceIdを指定できる |
+| `--decoder amatsukaze=PATH` | 基準の録画の音声をデコードするAmatsukazeCLI。`PATH --mode nicojk_wav -i TS -s SID -o WAV`を実行し、`WAV.json`を読む。子プロセスの出力はログへ流す |
+| `--cache-dir D` | しょぼいカレンダーの応答とTSの見出しのキャッシュ。既定はWindowsが`%LOCALAPPDATA%\nicojk_ass`、Linuxが`$XDG_CACHE_HOME/nicojk_ass`(なければ`~/.cache/nicojk_ass`) |
+| `--work-dir D` `--keep-work` | デコードしたWAVの置き場所(既定はOSの一時フォルダに作り、終わったら消す)。`--keep-work`で残す |
+
+`--alt`の流れ: しょぼいカレンダーで放送を特定し、同じ回の先行放送・同時刻の放送を候補にして、フォルダの録画をTSの見出し(ServiceIdと開始時刻)で確かめる。録画が見つかればデコードして音声照合する(`--wav`と`--decoder`が要る)。
+`--alt`と`--ref-ts`は`--timemap`・`--ref-wav`とは同時に指定できない(`--alt`と`--ref-ts`も同時には指定できない)。
+
+- 録画が見つからない、しょぼいカレンダーやデコード、照合に失敗した、`--wav`や`--decoder`がない: 警告を出して対象の局のコメントだけにする(終了コード0)。
+- 対象が遅れネット・独自枠(対象の局のjk番号のコメントが別の番組のもの)で、基準を使えない: 実況を付けず、終了コード100。遅れネットで基準を使うときは、`merge`を指定しても`replace`にする。
+- 方式D(コメント照合)は第4段、`--ts`と`--decoder ffmpeg`は第6段で足す。
+
+`--report`には、`"alt"`(`plan`と同じ内容)と`"decode"`(デコードの結果)が入る。
 
 出力:
 
@@ -73,6 +90,14 @@ python3 nicojk_ass.py make --comments-file comments.xml \
 終了コード: 0は成功(コメントが0件でもASSを書く)、100は付けるコメントがない(局にjk番号がない、APIが400/404を返した)、1はエラー。
 
 `nicojk_ass --version`で版を表示する。
+
+### `plan`
+
+```sh
+python3 nicojk_ass.py plan --sid 211 --start 2026-10-09T00:00:00 --search-dir /rec [--exclude F] [--cache-dir D] [--report plan.json]
+```
+
+`--alt`の放送の特定と録画の探索だけを行い(デコードも照合もしない)、結果をJSONで出す(`--report`を省くと標準出力)。`program`(特定した放送)、`target`(対象の局。`comments`は`ok`、`unrelated`(遅れネット・独自枠)、`unknown`)、`candidates`(基準の候補と見つかった録画)、`probed`(TSの見出しを確かめたファイルと結果)、`reference`(選んだ録画。なければnull)、`error`、`log`が入る。
 
 ### `align`(開発用)
 

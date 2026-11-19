@@ -500,6 +500,19 @@ class TimeMapTests(MakeRunner):
         api.assert_called_once_with("jk9", 1000, 1010, comments.DEFAULT_API_BASE)
         rebase.assert_called_once_with(source, 1000)
 
+    def test_基準の局のコメントを取れなければ対象の局へ戻る(self):
+        def fetch(channel, *rest):
+            if channel == "jk9":
+                raise comments.NicoJKExit(comments.EXIT_ERROR)
+            return '<packet><chat date="201" vpos="0">対象</chat></packet>'
+        code, converted, api, log = self.run_make(
+            self.args(["--channel", "jk1", "--ref-channel", "jk9",
+                       "--timemap", str(self.write_map([[0, 2, 10, 12]]))]), fetch=fetch)
+        self.assertEqual(code, 0)
+        self.assertEqual([chat.text for chat in converted[0][3]], ["対象"])
+        self.assertEqual([call.args[0] for call in api.call_args_list], ["jk9", "jk1"])
+        self.assertIn("基準の局のコメントを取得できない", log)
+
     def test_ref_sidで基準の局を引く(self):
         _, _, api, _ = self.run_make(
             self.args(["--ref-sid", "211", "--timemap", str(self.write_map([[0, 2, 10, 12]]))]),
