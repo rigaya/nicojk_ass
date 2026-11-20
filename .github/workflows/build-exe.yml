@@ -1,6 +1,6 @@
 name: Build exe
 
-# Windows x64、Linux x64、Linux arm64のexe(単一のexeとフォルダの形)を作り、zipにしてartifactに残す。
+# Windows x64、Linux x64、Linux arm64のexe(単一のexe)を作り、zipにしてartifactに残す。
 # ci.ymlとrelease.ymlから呼ばれる。exeを作る手順は packaging/build.py にある。
 on:
   workflow_call:
@@ -66,16 +66,13 @@ jobs:
           git -C danmaku2ass -c advice.detachedHead=false checkout -q "$COMMIT"
           cmp danmaku2ass/danmaku2ass.py src/nicojk_ass/_vendor/danmaku2ass.py
           mkdir -p dist
-          for MODE in onefile onedir; do
-            NAME="nicojk_ass-${VERSION}-${PLATFORM_NAME}"
-            if [ "$MODE" = onedir ]; then NAME="${NAME}-dir"; fi
-            cp -a "exe/${MODE}" "stage_${MODE}"
-            cp LICENSE README.md "stage_${MODE}/"
-            mkdir "stage_${MODE}/danmaku2ass-license"
-            cp danmaku2ass/COPYING "stage_${MODE}/danmaku2ass-license/COPYING"
-            # zipはどのランナーにもあるPythonのzipfileで作る(Linuxの実行の権限も残る)
-            (cd "stage_${MODE}" && "$PYTHON" -m zipfile -c "../dist/${NAME}.zip" ./*)
-          done
+          NAME="nicojk_ass-${VERSION}-${PLATFORM_NAME}"
+          mkdir stage
+          cp exe/nicojk_ass* LICENSE README.md stage/
+          mkdir stage/danmaku2ass-license
+          cp danmaku2ass/COPYING stage/danmaku2ass-license/COPYING
+          # zipはどのランナーにもあるPythonのzipfileで作る(Linuxの実行の権限も残る)
+          (cd stage && "$PYTHON" -m zipfile -c "../dist/${NAME}.zip" ./*)
           ls -l dist
 
       - uses: actions/upload-artifact@v4

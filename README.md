@@ -24,10 +24,11 @@
 
 | zip | 内容 |
 |---|---|
-| `nicojk_ass-<版>-windows-x64.zip` | Windows x64。単一のexe(起動時に一時フォルダへ展開するため、起動に0.3〜0.9秒かかる) |
-| `nicojk_ass-<版>-windows-x64-dir.zip` | Windows x64。フォルダの形(起動が速く、ウイルス対策ソフトに誤検知されにくい) |
-| `nicojk_ass-<版>-linux-x64.zip` / `-linux-x64-dir.zip` | Linux x64(glibc 2.28以上) |
-| `nicojk_ass-<版>-linux-arm64.zip` / `-linux-arm64-dir.zip` | Linux arm64(glibc 2.28以上) |
+| `nicojk_ass-<版>-windows-x64.zip` | Windows x64 |
+| `nicojk_ass-<版>-linux-x64.zip` | Linux x64(glibc 2.28以上) |
+| `nicojk_ass-<版>-linux-arm64.zip` | Linux arm64(glibc 2.28以上) |
+
+exeは単一のファイルで、起動のたびに一時フォルダへ展開するため、起動に0.3〜0.9秒かかる。
 
 zipを展開して実行する。`LICENSE`、`README.md`、`danmaku2ass-license/COPYING`(GPL-3の全文)も入っている。
 
@@ -158,7 +159,7 @@ python3 -m unittest discover -s tests -v
 
 ## exeをローカルで作る
 
-Python 3.12が要る。作業用のvenvを`build/`の下に作ってPyInstallerなどを入れ、単一のexeとフォルダの形を`dist/`に作る(`dist/onefile/`、`dist/onedir/nicojk_ass/`)。できたexeで`--version`が版と合うことも確かめる。CIも同じスクリプトを呼ぶ。
+Python 3.12が要る。作業用のvenvを`build/`の下に作ってPyInstallerなどを入れ、単一のexeを`dist/`に作る(`dist/nicojk_ass(.exe)`)。できたexeで`--version`が版と合うことも確かめる。CIも同じスクリプトを呼ぶ。
 
 ```sh
 python3 packaging/build.py                      # Windowsでは python packaging\build.py

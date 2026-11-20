@@ -68,7 +68,6 @@ jobs:
             echo "nicojk_ass ${VERSION}"
             echo
             echo "- ニコニコ実況コメントのASS生成ツール。Windows x64、Linux x64、Linux arm64のexeです。"
-            echo "- \`-dir\`の付かないzipは単一のexe、\`-dir\`のzipはフォルダの形です。"
             echo "- exeはGPL-3.0です(danmaku2assを含むため)。GPL-3の全文は各zipの\`danmaku2ass-license/COPYING\`にあります。"
             echo "- ソース(MIT): ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/tree/${VERSION}"
             echo "- 同梱のdanmaku2ass: https://github.com/m13253/danmaku2ass のコミット \`${D2A_COMMIT}\`"
