@@ -242,7 +242,7 @@ class MakeRefWavTests(MakeRunner):
         with contextlib.redirect_stderr(io.StringIO()) as err:
             with self.assertRaises(SystemExit):
                 cli.main(without_wav)
-        self.assertIn("--ref-wavには--wavが必要です", err.getvalue())
+        self.assertIn("--ref-wavには--wavか--tsが必要です", err.getvalue())
 
 
 @unittest.skipIf(np is None, "numpyがありません")

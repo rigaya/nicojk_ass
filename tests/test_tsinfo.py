@@ -223,5 +223,113 @@ class TsInfoTests(unittest.TestCase):
         self.assertEqual(again.to_dict(), info.to_dict())
 
 
+def pes(pid, pts, stream_id, size=188):
+    """PTS付きのPESを1パケットにする。"""
+    pts &= (1 << 33) - 1
+    body = bytes([
+        0x20 | (((pts >> 30) & 7) << 1) | 1,
+        (pts >> 22) & 0xFF,
+        (((pts >> 15) & 0x7F) << 1) | 1,
+        (pts >> 7) & 0xFF,
+        ((pts & 0x7F) << 1) | 1,
+    ])
+    pes_data = b"\x00\x00\x01" + bytes([stream_id, 0x00, 0x00, 0x80, 0x80, 5]) + body
+    packet = bytearray(188)
+    packet[0:4] = bytes([0x47, 0x40 | (pid >> 8), pid & 0xFF, 0x10])
+    packet[4:4 + len(pes_data)] = pes_data
+    raw = bytes(packet)
+    return (b"\x00" * 4 + raw) if size == 192 else raw
+
+
+def pcr(pid, base, size=188):
+    """PCRだけのパケット。baseは90kHz。"""
+    base &= 0x1FFFFFFFF
+    packet = bytearray(188)
+    packet[0:4] = bytes([0x47, (pid >> 8) & 0x1F, pid & 0xFF, 0x20])
+    packet[4] = 7
+    packet[5] = 0x10
+    packet[6:11] = bytes([(base >> 25) & 0xFF, (base >> 17) & 0xFF, (base >> 9) & 0xFF,
+                          (base >> 1) & 0xFF, ((base & 1) << 7) | 0x7E])
+    raw = bytes(packet)
+    return (b"\x00" * 4 + raw) if size == 192 else raw
+
+
+class TimelineTests(unittest.TestCase):
+    START = 1760106600
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def write(self, data):
+        path = os.path.join(self.tmp.name, "a.ts")
+        with open(path, "wb") as f:
+            f.write(data)
+        return path
+
+    def file(self, *parts, size=188):
+        head = b"".join(packets(PAT_PID, pat([(1064, PMT_PID)]), size))
+        head += b"".join(packets(PMT_PID, pmt(1064, VIDEO_PID), size))
+        return self.write(head + b"".join(parts))
+
+    def test_TOTとPCRとPTSから先頭と末尾を求める(self):
+        origin = 1_000_000
+        path = self.file(pcr(VIDEO_PID, origin + 9000),
+                         b"".join(packets(TOT_PID, tot_section(self.START))),
+                         pes(VIDEO_PID, origin + 3000, 0xE0),  # 表示順では次のフレームが先
+                         pes(VIDEO_PID, origin, 0xE0),
+                         pes(0x0110, origin + 3600, 0xC0),
+                         pes(VIDEO_PID, origin + 90000 * 5, 0xE0))
+        info = tsinfo.read_timeline(path)
+        self.assertEqual(info["sid"], 1064)
+        self.assertEqual(info["audio_pid"], 0x0110)
+        self.assertAlmostEqual(info["start"], self.START - 0.1, places=6)
+        self.assertEqual(info["start_rounded"], self.START)
+        self.assertAlmostEqual(info["duration"], 5.0, places=6)
+        self.assertAlmostEqual(info["audio_shift"], 0.04, places=6)
+        self.assertTrue(info["has_time"])
+
+    def test_192バイトでも同じ時刻になる(self):
+        origin = 500_000
+        path = self.file(pcr(VIDEO_PID, origin, 192),
+                         b"".join(packets(TOT_PID, tot_section(self.START), 192)),
+                         pes(VIDEO_PID, origin, 0xE0, 192),
+                         pes(0x0110, origin, 0xC0, 192),
+                         pes(VIDEO_PID, origin + 90000, 0xE0, 192), size=192)
+        info = tsinfo.read_timeline(path)
+        self.assertAlmostEqual(info["start"], self.START, places=6)
+        self.assertAlmostEqual(info["duration"], 1.0, places=6)
+        self.assertAlmostEqual(info["audio_shift"], 0.0, places=6)
+
+    def test_サービスが複数ならsidが要る(self):
+        data = b"".join(packets(PAT_PID, pat([(1064, PMT_PID), (1072, PMT_PID + 1)])))
+        data += b"".join(packets(PMT_PID, pmt(1064, VIDEO_PID)))
+        data += b"".join(packets(PMT_PID + 1, pmt(1072, VIDEO_PID + 1)))
+        path = self.write(data + pes(VIDEO_PID, 1000, 0xE0) + pes(VIDEO_PID, 1000 + 90000, 0xE0)
+                          + pes(VIDEO_PID + 1, 1000, 0xE0) + pes(VIDEO_PID + 1, 1000 + 90000, 0xE0))
+        with self.assertRaisesRegex(tsinfo.TsInfoError, "--sid"):
+            tsinfo.read_timeline(path)
+        info = tsinfo.read_timeline(path, 1072)
+        self.assertEqual(info["sid"], 1072)
+        self.assertEqual(info["video_pid"], VIDEO_PID + 1)
+        self.assertFalse(info["has_time"])
+
+    def test_開いたGOPの先頭のBピクチャは原点にしない(self):
+        frames = [(1000, 3), (1000 + 12012, 1), (1000 + 6006, 3)]
+        self.assertEqual(tsinfo.video_origin(frames, 0x02), 1000 + 6006)
+        self.assertEqual(tsinfo.video_origin(frames, 0x1B), 1000)
+        pes_b = b"\x00\x00\x01\xe0\x00\x00\x80\x80\x05" + b"\x00" * 5 + b"\x00\x00\x01\x00\x00\x18"
+        # temporal_reference 0、coding_type 3(B)。16bitの上位10bitが番号、続く3bitが種類。
+        self.assertEqual(tsinfo._mpeg2_picture_type(pes_b), 3)
+
+    def test_PTSの差は33bitの折り返しを戻す(self):
+        self.assertAlmostEqual(tsinfo.pts_difference(100, (1 << 33) - 9000), 9100.0, places=3)
+        start, rounded, duration, has_time, shift = tsinfo._times_from(
+            [((1 << 33) - 9000)], None, [(0, 100)], self.START, 0)
+        self.assertTrue(has_time)
+        self.assertAlmostEqual(start, self.START - 9100 / 90000, places=6)
+        self.assertAlmostEqual(duration, 0.0, places=6)
+
+
 if __name__ == "__main__":
     unittest.main()

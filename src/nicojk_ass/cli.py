@@ -11,7 +11,7 @@ import time
 import xml.etree.ElementTree as ET
 from decimal import Decimal, InvalidOperation
 
-from . import __version__, align_comment, decoder, stations
+from . import __version__, align_comment, decoder, stations, tsinfo
 from .comments import (DEFAULT_API_BASE, EXIT_CHANNEL_NOT_FOUND, EXIT_ERROR, EXIT_SUCCESS,
                        NicoJKExit, count_chats, fetch_api_comments, fetch_target_comments,
                        file_reference, inspect_comments, log, parse_time, read_comments_file,
@@ -97,10 +97,11 @@ def build_parser():
 
     make = sub.add_parser("make", help="コメントを取得してASSを生成する")
     target = make.add_argument_group("対象")
+    target.add_argument("--ts", help="対象の録画(TS)。先頭と末尾の時刻を見出しから求める。--wavがなければデコードする")
     target.add_argument("--sid", type=int, help="対象の局のServiceId(ch_sid.txtでjk番号を引く)")
     target.add_argument("--channel", type=_channel_arg, help="対象の実況チャンネル(例: jk1)。--sidより優先")
-    target.add_argument("--start", required=True, type=_time_arg, help="対象の録画の先頭の時刻")
-    target.add_argument("--end", required=True, type=_time_arg, help="対象の録画の末尾の時刻")
+    target.add_argument("--start", type=_time_arg, help="対象の録画の先頭の時刻")
+    target.add_argument("--end", type=_time_arg, help="対象の録画の末尾の時刻")
     target.add_argument("--program-start", type=_time_arg, help="録画した放送の開始時刻(省略時は--start)")
     target.add_argument("--wav", help="対象の音声(8kHz・16bitのWAV)。--ref-wavと一緒に使う")
     target.add_argument("--spans", help="本編の区間のJSON({\"spans\": [[開始, 終了], ...]}、対象の時刻での秒)。方式Dで使う")
@@ -146,8 +147,9 @@ def build_parser():
 
     make.add_argument("--api-url", default=DEFAULT_API_BASE,
                       help=f"過去ログAPIのベースURL (既定: {DEFAULT_API_BASE})")
-    make.add_argument("--decoder", type=_decoder_arg, metavar="amatsukaze=PATH",
-                      help="基準の録画の音声をデコードするプログラム")
+    make.add_argument("--decoder", type=_decoder_arg, metavar="KIND=PATH",
+                      help="録画の音声をデコードするプログラム。"
+                           "amatsukaze=<AmatsukazeCLI>かffmpeg[=<パス>]。--tsで省略したときはffmpeg")
     make.add_argument("--cache-dir", help="しょぼいカレンダーの応答とTSの見出しのキャッシュの置き場所"
                                           "(既定は利用者ごとのキャッシュのフォルダ)")
     make.add_argument("--work-dir", help="デコードしたWAVの置き場所(既定はOSの一時フォルダに作り、終わったら消す)")
@@ -180,8 +182,14 @@ def _is_comment_align(args):
 
 
 def _validate_make(parser, args):
-    if args.end <= args.start:
-        parser.error("--endは--startより後にしてください")
+    if args.ts:
+        if args.start is not None or args.end is not None:
+            parser.error("--tsと--start/--endは同時に指定できません")
+    else:
+        if args.start is None or args.end is None:
+            parser.error("対象の時刻がありません。--startと--end、または--tsを指定してください")
+        elif args.end <= args.start:
+            parser.error("--endは--startより後にしてください")
     if args.timemap and args.ref_wav:
         parser.error("--timemapと--ref-wavは同時に指定できません")
     if args.alt and args.mode:
@@ -195,8 +203,8 @@ def _validate_make(parser, args):
     if (args.search_dir or args.exclude) and not args.alt:
         parser.error("--search-dir/--excludeには--altが必要です")
     args.mode = args.alt or args.mode or "replace"
-    if args.ref_wav and not args.wav:
-        parser.error("--ref-wavには--wavが必要です")
+    if args.ref_wav and not args.wav and not args.ts:
+        parser.error("--ref-wavには--wavか--tsが必要です")
     if args.timemap or args.ref_wav or _is_comment_align(args):
         option = "--timemap" if args.timemap else "--ref-wav" if args.ref_wav else "基準の局と時刻(方式D)"
         if args.ref_start is None or args.ref_end is None:
@@ -385,6 +393,59 @@ def _alt_plan(args, cache_dir):
     return finder.find(args.sid, float(program_start), args.search_dir, args.exclude)
 
 
+def _apply_ts_target(args, report, work):
+    """--tsから対象の時刻を決め、音声照合に使うときは対象のWAVも作る。"""
+    if not args.ts:
+        return
+    if args.decoder is None:
+        args.decoder = ("ffmpeg", "ffmpeg")
+    try:
+        timeline = tsinfo.read_timeline(args.ts, args.sid)
+    except (OSError, tsinfo.TsInfoError) as error:
+        log(f"対象の録画を読めません: {error}")
+        raise NicoJKExit(EXIT_ERROR)
+    if args.sid is None:
+        args.sid = timeline["sid"]
+    report["target"]["sid"] = args.sid
+    report["target"]["ts"] = args.ts
+    if not timeline["has_time"]:
+        log("対象の録画にTOTまたはPCRがないため先頭の時刻を求められません")
+        raise NicoJKExit(EXIT_ERROR)
+    args.start = _normalize(Decimal(f"{timeline['start']:.6f}"))
+    args.end = _normalize(Decimal(f"{timeline['end']:.6f}"))
+    report["target"]["start"] = args.start
+    report["target"]["end"] = args.end
+    if args.end <= args.start:
+        log("対象の録画の長さを求められません")
+        raise NicoJKExit(EXIT_ERROR)
+    if args.program_start is None:
+        program = None
+        try:
+            program = tsinfo.read_ts_info(args.ts).start_of(args.sid)
+        except (OSError, tsinfo.TsInfoError) as error:
+            log(f"警告: 放送の開始時刻を読めないため、録画の先頭の時刻を使います: {error}")
+        args.program_start = _normalize(Decimal(f"{program:.6f}")) if program is not None else args.start
+        report["target"]["program_start"] = args.program_start
+    log(f"対象の録画: sid {args.sid} / 先頭 {args.start} / 末尾 {args.end}")
+    if args.wav or not (args.alt or args.ref_ts or args.ref_wav):
+        return
+    wav = work.file("target.wav")
+    try:
+        info = decoder.decode(args.decoder[0], args.decoder[1], args.ts, args.sid, wav, timeline)
+    except decoder.DecodeError as error:
+        log(f"警告: 対象の音声をデコードできません: {error}")
+        report["target_decode"] = {"success": False, "reason": str(error)}
+        if args.ref_wav:
+            raise NicoJKExit(EXIT_ERROR)
+        return
+    report["target_decode"] = {"success": info["has_time"], "ts": args.ts, "wav": wav, **info}
+    if not info["has_time"]:
+        log("警告: 対象の録画にTOTがないため音声照合を行いません")
+        report["target_decode"]["reason"] = "TOTがありません"
+        return
+    args.wav = wav
+
+
 def _decode_reference(args, report, work, ts_path, sid):
     """基準のTSをデコードし、args.ref_wav・ref_start・ref_end・ref_sidを設定する。
     使えないときは理由を警告に出してFalseを返す。"""
@@ -398,7 +459,7 @@ def _decode_reference(args, report, work, ts_path, sid):
         return False
     wav = work.file("reference.wav")
     try:
-        info = decoder.decode_amatsukaze(args.decoder[1], ts_path, sid, wav)
+        info = decoder.decode(args.decoder[0], args.decoder[1], ts_path, sid, wav)
     except decoder.DecodeError as error:
         log(f"警告: 基準の録画のデコードに失敗しました: {error}")
         report["decode"] = {"success": False, "reason": str(error), "ts": ts_path}
@@ -643,6 +704,7 @@ def _run_make(args, work):
                          "program_start": args.program_start},
               "outputs": [path for _, _, path in args.output]}
     try:
+        _apply_ts_target(args, report, work)
         spans = None
         if args.spans:
             try:

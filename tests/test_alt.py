@@ -358,8 +358,11 @@ class AltArgumentTests(AltRunner):
                 self.assertIn(message, self.error(args))
 
     def test_decoderの形式を検査する(self):
-        self.assertIn("amatsukaze=", self.error(["--decoder", "ffmpeg"]))
+        self.assertIn("amatsukaze=", self.error(["--decoder", "ffprobe"]))
+        self.assertIn("同時に指定できません", self.error(["--ts", "a.ts"]))
         self.assertEqual(decoder.parse_decoder("amatsukaze=/a b/c"), ("amatsukaze", "/a b/c"))
+        self.assertEqual(decoder.parse_decoder("ffmpeg"), ("ffmpeg", "ffmpeg"))
+        self.assertEqual(decoder.parse_decoder("ffmpeg=/bin/ffmpeg"), ("ffmpeg", "/bin/ffmpeg"))
 
 
 class PlanCommandTests(AltRunner):

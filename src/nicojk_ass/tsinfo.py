@@ -3,6 +3,7 @@
 ファイルの真ん中から4MBずつ最大100MB読み、取れなければ先頭寄り(size/30)から読み直す。
 PAT・PMT・SDT・EIT(現在の番組のsection 0)・TDT/TOTを見る。ARIBの文字列(番組名)は読まない。
 188バイトと192バイト(m2ts)のパケットに対応する。
+外部向けの--tsでは、先頭付近のTOT・PCR・映像のPTSから先頭の時刻を、末尾付近のPTSから末尾を求める。
 """
 
 import os
@@ -426,3 +427,370 @@ def read_ts_info(path):
                 raise TsInfoError("TSファイルに情報がありません")
     return TsInfo(list(parser.programs), jst_to_unix(parser.start_raw),
                   jst_to_unix(parser.time) if parser.time is not None else None)
+
+
+# ------------------------------------------------------------------ #
+# 先頭と末尾の時刻(外部向けの--ts。設計書4.4)
+# ------------------------------------------------------------------ #
+
+HEAD_BYTES = 8 * 1024 * 1024
+HEAD_MAX_BYTES = 64 * 1024 * 1024
+TAIL_BYTES = 8 * 1024 * 1024
+_PTS_MOD = 1 << 33
+_AUDIO_STREAM_TYPE = 0x0F
+
+
+def pts_difference(pts, origin):
+    """33bitのPTSの差(秒ではなく90kHzの目盛り)。std::remainderと同じ半分の範囲に収める。"""
+    import math
+    return math.remainder(float(pts) - float(origin), float(_PTS_MOD))
+
+
+def _int32(value):
+    """C++のint32_tへの変換。下位32bitを符号付きにする。"""
+    value = int(value) & 0xFFFFFFFF
+    return value - 0x100000000 if value >= 0x80000000 else value
+
+
+def _c_round(value):
+    """std::round(半分は0から遠い側)。"""
+    import math
+    return math.floor(value + 0.5) if value >= 0 else math.ceil(value - 0.5)
+
+
+def _pts_of(payload):
+    """PESの先頭からPTSを読む。PTSがなければNone。"""
+    if len(payload) < 14 or payload[0:3] != b"\x00\x00\x01":
+        return None
+    if not payload[7] & 0x80 or payload[8] < 5:
+        return None
+    b = payload[9:14]
+    return ((((b[0] >> 1) & 7) << 30) | (b[1] << 22) | ((b[2] & 0xFE) << 14) | (b[3] << 7) | (b[4] >> 1))
+
+
+def _pcr_base(packet):
+    """適応フィールドのPCRの90kHz部分。なければNone。"""
+    afc = (packet[3] >> 4) & 3
+    if not afc & 2:
+        return None
+    length = packet[4]
+    if length < 7 or not packet[5] & 0x10:
+        return None
+    b = packet[6:12]
+    return ((b[0] << 25) | (b[1] << 17) | (b[2] << 9) | (b[3] << 1) | (b[4] >> 7)) & 0x1FFFFFFFF
+
+
+def _payload(packet):
+    """(PESの先頭か, ペイロード)。適応フィールドだけならNone。"""
+    afc = (packet[3] >> 4) & 3
+    if not afc & 1:
+        return False, b""
+    offset = 4
+    if afc & 2:
+        offset = 5 + packet[4]
+    if offset >= 188:
+        return False, b""
+    return bool(packet[1] & 0x40), packet[offset:]
+
+
+def _find_sync(data, begin):
+    """data[begin:]で、同期バイトが続く最初の位置とパケットの大きさ(188か192)を返す。
+
+    見出しの走査と同じく8パケット分を見る。データがそれより短いときは、収まる数(最低2)で見る。
+    """
+    if len(data) - begin < 188 * 2:
+        return None
+    checks = SYNC_CHECK_PACKETS
+    while checks >= 2 and begin + checks * 192 > len(data):
+        checks -= 1
+    limit = len(data) - (checks - 1) * 192
+    pos = begin
+    while pos < limit:
+        pos = data.find(b"\x47", pos, limit)
+        if pos < 0:
+            return None
+        for size in (188, 192):
+            if pos + (checks - 1) * size + 188 <= len(data) and all(
+                    data[pos + size * k] == 0x47 for k in range(checks)):
+                return pos, size
+        pos += 1
+    return None
+
+
+def _iter_packets(data):
+    """同期の取れた188バイトのパケットを(先頭からの番号, パケット)で返す。"""
+    found = _find_sync(data, 0)
+    if not found:
+        return
+    pos, size = found
+    index = 0
+    while pos + 188 <= len(data):
+        if data[pos] != 0x47:
+            found = _find_sync(data, pos + 1)
+            if not found:
+                return
+            pos, size = found
+            continue
+        yield index, data[pos:pos + 188]
+        index += 1
+        pos += size
+
+
+class _Timeline:
+    """先頭付近のPAT・PMT・TOT・PCR・映像と音声のPTS。"""
+
+    def __init__(self):
+        self.pmt_pid = {}       # ServiceId -> PMTのPID
+        self.video_pid = {}
+        self.video_type = {}
+        self.audio_pid = {}
+        self.pcr_pid = {}
+        self.buffers = {0x0000: _SectionBuffer(), 0x0014: _SectionBuffer()}
+        self.tot = None
+        self.tot_index = None
+        self.pcr = []           # (パケット番号, PCRの90kHz)
+
+    def feed_psi(self, index, packet):
+        pid = ((packet[1] & 0x1F) << 8) | packet[2]
+        if pid in self.pmt_pid.values() and pid not in self.buffers:
+            self.buffers[pid] = _SectionBuffer()
+        buf = self.buffers.get(pid)
+        if buf is None:
+            return
+        pusi, payload = _payload(packet)
+        if not payload:
+            return
+        for section in buf.feed(pusi, payload):
+            self._section(pid, index, section)
+
+    def _section(self, pid, index, section):
+        table_id = section[0]
+        ssi = section[1] & 0x80
+        if table_id == 0x00 and pid == 0x0000 and ssi and _crc_ok(section):
+            self._pat(section)
+        elif table_id == 0x02 and ssi and _crc_ok(section):
+            self._pmt(pid, section)
+        elif table_id == 0x73 and pid == 0x0014 and len(section) >= 8 and not ssi and _crc_ok(section):
+            if self.tot is None:
+                self.tot = jst_to_unix(int.from_bytes(section[3:8], "big"))
+                self.tot_index = index
+        elif table_id == 0x70 and pid == 0x0014 and len(section) >= 8 and self.tot is None:
+            self.tot = jst_to_unix(int.from_bytes(section[3:8], "big"))
+            self.tot_index = index
+
+    def _pat(self, section):
+        payload = section[8:-4]
+        if len(payload) % 4:
+            return
+        for i in range(0, len(payload), 4):
+            number = (payload[i] << 8) | payload[i + 1]
+            if number == 0:
+                continue
+            self.pmt_pid[number] = ((payload[i + 2] & 0x1F) << 8) | payload[i + 3]
+
+    def _pmt(self, pid, section):
+        if not section[5] & 1:
+            return
+        sid = (section[3] << 8) | section[4]
+        if self.pmt_pid.get(sid) != pid:
+            return
+        payload = section[8:-4]
+        if len(payload) < 4:
+            return
+        self.pcr_pid[sid] = ((payload[0] & 0x1F) << 8) | payload[1]
+        pos = 4 + (((payload[2] & 0x0F) << 8) | payload[3])
+        video = audio = None
+        while pos + 5 <= len(payload):
+            stream_type = payload[pos]
+            es_pid = ((payload[pos + 1] & 0x1F) << 8) | payload[pos + 2]
+            es_len = ((payload[pos + 3] & 0x0F) << 8) | payload[pos + 4]
+            pos += 5 + es_len
+            if video is None and stream_type in _VIDEO_STREAM_TYPES:
+                video = (es_pid, stream_type)
+            elif audio is None and stream_type == _AUDIO_STREAM_TYPE:
+                audio = es_pid
+        if video is not None:
+            self.video_pid[sid] = video[0]
+            self.video_type[sid] = video[1]
+        if audio is not None:
+            self.audio_pid[sid] = audio
+
+    def video_services(self):
+        return [sid for sid in self.pmt_pid if sid in self.video_pid]
+
+
+def _choose_service(timeline, sid):
+    services = timeline.video_services()
+    if sid is not None:
+        if sid not in timeline.video_pid:
+            known = ", ".join(str(item) for item in services) or "なし"
+            raise TsInfoError(f"ServiceId {sid} の映像がありません(ファイルにある映像: {known})")
+        return sid
+    if len(services) == 1:
+        return services[0]
+    if not services:
+        raise TsInfoError("映像のあるサービスがありません")
+    raise TsInfoError("サービスが複数あります。--sidで選んでください: " + ", ".join(str(item) for item in services))
+
+
+def _mpeg2_picture_type(payload):
+    """PESから最初のMPEG-2ピクチャの種類(1=I, 2=P, 3=B)を返す。見つからなければNone。"""
+    if len(payload) > 9 and payload[0:3] == b"\x00\x00\x01":
+        payload = payload[9 + payload[8]:]
+    start = payload.find(b"\x00\x00\x01\x00")
+    if start < 0 or start + 6 > len(payload):
+        return None
+    word = (payload[start + 4] << 8) | payload[start + 5]
+    kind = (word >> 3) & 7
+    return kind if kind in (1, 2, 3) else None
+
+
+def video_origin(frames, stream_type):
+    """映像の先頭のPTS。
+
+    framesはファイル順の(PTS, ピクチャの種類)。MPEG-2では、最初のIまたはPより前の
+    Bピクチャ(開いたGOPの先頭で表示されないもの)を除いたあとの最小のPTSを使う。
+    Amatsukazeがデコードできない先頭フレームを原点にしないため。
+    """
+    if not frames:
+        return None
+    if stream_type == 0x02:
+        for index, (_, kind) in enumerate(frames):
+            if kind in (1, 2):
+                frames = frames[index:]
+                break
+    return min(pts for pts, _ in frames)
+
+
+def _media_pts(data, video_pid, audio_pid, pcr_pid, stream_type=None):
+    """映像の(PTS, 種類)の並び、最初の音声のPTS、PCRの(パケット番号, 値)の並び。
+
+    MPEG-2のときだけ、先頭の数十枚についてピクチャの種類を読む。PESが複数パケットに
+    分かれていても、ピクチャヘッダは先頭パケットに入る。
+    """
+    video, audio, pcr = [], None, []
+    classify = stream_type == 0x02
+    current = None
+
+    def finish():
+        nonlocal current
+        if current is None or current["pts"] is None:
+            current = None
+            return
+        kind = _mpeg2_picture_type(current["data"]) if classify and len(video) < 120 else None
+        video.append((current["pts"], kind))
+        current = None
+
+    for index, packet in _iter_packets(data):
+        pid = ((packet[1] & 0x1F) << 8) | packet[2]
+        if pid == pcr_pid:
+            base = _pcr_base(packet)
+            if base is not None:
+                pcr.append((index, base))
+        if (packet[3] >> 6) & 3:
+            continue
+        pusi, payload = _payload(packet)
+        if pid == video_pid:
+            if pusi:
+                finish()
+                pts = _pts_of(payload)
+                if classify and len(video) < 120:
+                    current = {"pts": pts, "data": bytearray(payload)}
+                elif pts is not None:
+                    video.append((pts, None))
+            elif current is not None and len(current["data"]) < 8192:
+                current["data"] += payload
+        elif pusi and pid == audio_pid and audio is None:
+            audio = _pts_of(payload)
+    finish()
+    return video, audio, pcr
+
+
+def _pcr_at(samples, index):
+    """TOTのパケット位置のPCRを、前後のPCRから直線で補間する。"""
+    if not samples:
+        return None
+    before = after = None
+    for sample_index, base in samples:
+        if sample_index <= index:
+            before = (sample_index, base)
+        elif after is None:
+            after = (sample_index, base)
+            break
+    if before and after and after[0] != before[0]:
+        span = pts_difference(after[1], before[1])
+        return before[1] + span * (index - before[0]) / (after[0] - before[0])
+    return (before or after)[1]
+
+
+def _times_from(video_pts, audio_pts, pcr, tot, tot_index, origin=None):
+    """映像の先頭のPTSを原点にした時刻。TOTとPCRがなければhas_timeはFalseでstartは0。"""
+    if origin is None:
+        origin = min(video_pts)
+    end_pts = max(video_pts, key=lambda pts: pts_difference(pts, origin))
+    duration = pts_difference(end_pts, origin) / 90000.0
+    audio_shift = None if audio_pts is None else pts_difference(audio_pts, origin) / 90000.0
+    if tot is None or tot_index is None:
+        return 0.0, 0, duration, False, audio_shift
+    pcr_value = _pcr_at(pcr, tot_index)
+    if pcr_value is None:
+        return 0.0, 0, duration, False, audio_shift
+    # StreamReformInfoのfirstFrameTime_と同じく、TOTから映像の先頭へ戻す。丸めない値を正とする。
+    difference = _int32(pcr_value - origin) / 90000.0
+    start = tot - difference
+    return start, tot - _c_round(difference), duration, True, audio_shift
+
+
+def _parse_head(data, sid):
+    """先頭のバイト列から、選んだサービスと、映像・音声のPTS、PCRを返す。"""
+    timeline = _Timeline()
+    for index, packet in _iter_packets(data):
+        timeline.feed_psi(index, packet)
+    chosen = _choose_service(timeline, sid)
+    video_pid = timeline.video_pid[chosen]
+    audio_pid = timeline.audio_pid.get(chosen)
+    pcr_pid = timeline.pcr_pid.get(chosen, video_pid)
+    video, audio, pcr = _media_pts(data, video_pid, audio_pid, pcr_pid, timeline.video_type.get(chosen))
+    ready = bool(video) and audio is not None and timeline.tot is not None and bool(pcr)
+    return timeline, chosen, video_pid, audio_pid, video, audio, pcr, ready
+
+
+def read_timeline(path, sid=None):
+    """対象の録画の先頭と末尾の時刻を返す。
+
+    先頭付近の最初のTOTと、その位置のPCR、映像のPTSの最小から先頭を求める。
+    末尾は、末尾付近の映像のPTSから求める。AmatsukazeのfirstFrameTimeExactと同じ戻し方。
+    戻り値はsid, start, start_rounded, end, duration, has_time, video_pid, audio_pid, audio_shift。
+    audio_shiftは、音声の先頭が映像の先頭より何秒遅いか(負なら音声が前)。
+    """
+    with open(path, "rb") as file:
+        size = os.fstat(file.fileno()).st_size
+        head = file.read(min(size, HEAD_BYTES))
+        try:
+            timeline, chosen, video_pid, audio_pid, video, audio, pcr, ready = _parse_head(head, sid)
+        except TsInfoError:
+            timeline = None
+            ready = False
+        if not ready and size > len(head):
+            head += file.read(min(size - len(head), HEAD_MAX_BYTES - len(head)))
+            timeline, chosen, video_pid, audio_pid, video, audio, pcr, ready = _parse_head(head, sid)
+        elif timeline is None:
+            _parse_head(head, sid)
+        if not video:
+            raise TsInfoError("映像の先頭が見つかりません")
+        origin = video_origin(video, timeline.video_type.get(chosen))
+        if size > len(head):
+            file.seek(max(0, size - TAIL_BYTES))
+            tail_video, _, _ = _media_pts(file.read(TAIL_BYTES), video_pid, None, -1)
+            if not tail_video:
+                raise TsInfoError("映像の末尾が見つかりません")
+            # 先頭側は原点だけを残し、末尾はファイルの終わりのPTSにする。
+            video = [(origin, None)] + tail_video
+        video_pts = [pts for pts, _ in video]
+    start, start_rounded, duration, has_time, audio_shift = _times_from(
+        video_pts, audio, pcr, timeline.tot, timeline.tot_index, origin)
+    if duration <= 0:
+        raise TsInfoError("映像の長さを求められません")
+    return {"sid": chosen, "start": start, "start_rounded": start_rounded,
+            "end": start + duration, "duration": duration, "has_time": has_time,
+            "video_pid": video_pid, "audio_pid": audio_pid, "audio_shift": audio_shift}
