@@ -89,8 +89,6 @@ _NICOCONVASS_COLORS = [
     ("blue",   "&H00ff0000"),
     ("purple", "&H00800080"),
     ("black",  "&H00000000"),
-    # 統合デバッグ(AMATSUKAZE_NICOJK_MERGE_DEBUG)の基準コメント。#DCF2F2
-    ("dcf2f2", "&H00F2F2DC"),
 ]
 
 _MOVE_RE = re.compile(
@@ -129,8 +127,6 @@ def _build_bgr_to_style_map():
         0xcccc99: "white", 0xcc0033: "red", 0xff6600: "orange",
         0x999900: "yellow", 0x00cc66: "green", 0x33ffcc: "cyan",
         0x6633cc: "purple",
-        # 統合デバッグ用。BT.709変換後のBGRからスタイルへ戻す。
-        0xDCF2F2: "dcf2f2",
     }
     result = {}
     for rgb, style in nico_color_to_style.items():

@@ -466,18 +466,6 @@ class TimeMapTests(MakeRunner):
         chats = ET.fromstring(timemap.merge_comments(reference, target)).findall("chat")
         self.assertEqual([chat.get("mail") for chat in chats], ["ue red", "blue"])
 
-    def test_DCF2F2は配置後もその色のスタイルになる(self):
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("danmaku2ass_vendor", render.DANMAKU2ASS_PATH)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        xml = '<packet><chat vpos="100" date="1" no="1" mail="red #DCF2F2">基準</chat></packet>'
-        comment = next(module.ReadCommentsNiconico(io.StringIO(xml), 25))
-        self.assertEqual(comment[5], 0xDCF2F2)
-        bgr = render._convert_color_bt709(0xDCF2F2).upper()
-        self.assertEqual(render._BGR_TO_STYLE[bgr], "dcf2f2")
-        self.assertEqual(dict(render._NICOCONVASS_COLORS)["dcf2f2"], "&H00F2F2DC")
-
     def test_mark_reference_colorは統合のときだけ効く(self):
         target = '<packet><chat date="201" no="88" mail="blue">対象</chat></packet>'
         merged = self.args(["--ref-comments-file", str(self.write_comments()), "--timemap",
