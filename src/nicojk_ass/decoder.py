@@ -26,6 +26,8 @@ def parse_decoder(value):
 # AmatsukazeCLIの出力は「AMT [info] ...」の形で、警告とエラーだけをログに残す。
 _PROBLEM_LINE = re.compile(r"^AMT \[(warn|warning|error|fatal)\]", re.IGNORECASE)
 TAIL_LINES = 30
+# AmatsukazeCLIは、WindowsではANSIのコードページ(日本語ならcp932)で、LinuxではUTF-8で出力する
+CHILD_ENCODING = "mbcs" if sys.platform == "win32" else "utf-8"
 
 
 def child_env():
@@ -77,7 +79,7 @@ def decode_amatsukaze(exe, ts_path, sid, wav_path):
     except OSError as error:
         fail(f"デコーダーを起動できません: {error}")
     for line in process.stdout:
-        text = line.decode("utf-8", "replace").rstrip("\r\n")
+        text = line.decode(CHILD_ENCODING, "replace").rstrip("\r\n")
         if text:
             lines.append(text)
             if _PROBLEM_LINE.match(text):
