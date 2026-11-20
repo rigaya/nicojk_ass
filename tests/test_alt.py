@@ -427,3 +427,25 @@ class DecoderTests(AltRunner):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ChildEnvTests(unittest.TestCase):
+    """exeのときは、子プロセスのLD_LIBRARY_PATHをexeの起動前の値に戻す。"""
+
+    def test_ソースのままなら環境変数をそのまま渡す(self):
+        with mock.patch.dict(os.environ, {"LD_LIBRARY_PATH": "/a"}, clear=False):
+            self.assertEqual(decoder.child_env()["LD_LIBRARY_PATH"], "/a")
+
+    def test_exeではLD_LIBRARY_PATH_ORIGに戻す(self):
+        with mock.patch.object(sys, "frozen", True, create=True), \
+                mock.patch.dict(os.environ, {"LD_LIBRARY_PATH": "/tmp/_MEI1", "LD_LIBRARY_PATH_ORIG": "/usr/local/lib"}):
+            env = decoder.child_env()
+        self.assertEqual(env["LD_LIBRARY_PATH"], "/usr/local/lib")
+        self.assertNotIn("LD_LIBRARY_PATH_ORIG", env)
+
+    def test_exeでもとの値がなければ消す(self):
+        with mock.patch.object(sys, "frozen", True, create=True), \
+                mock.patch.dict(os.environ, {"LD_LIBRARY_PATH": "/tmp/_MEI1"}):
+            os.environ.pop("LD_LIBRARY_PATH_ORIG", None)
+            env = decoder.child_env()
+        self.assertNotIn("LD_LIBRARY_PATH", env)

@@ -28,6 +28,23 @@ _PROBLEM_LINE = re.compile(r"^AMT \[(warn|warning|error|fatal)\]", re.IGNORECASE
 TAIL_LINES = 30
 
 
+def child_env():
+    """子プロセスに渡す環境変数。
+
+    PyInstallerのexe(Linux)は、同梱した共有ライブラリ(古いlibstdc++など)のフォルダをLD_LIBRARY_PATHに足して
+    動く。そのまま子のAmatsukazeCLIに引き継ぐと、システムのlibstdc++を期待する子が起動できないので、
+    exeが起動される前の値(LD_LIBRARY_PATH_ORIG)に戻す。もとがなければ消す。
+    """
+    env = dict(os.environ)
+    if getattr(sys, "frozen", False):
+        original = env.pop("LD_LIBRARY_PATH_ORIG", None)
+        if original is not None:
+            env["LD_LIBRARY_PATH"] = original
+        else:
+            env.pop("LD_LIBRARY_PATH", None)
+    return env
+
+
 def decode_amatsukaze(exe, ts_path, sid, wav_path):
     """`<exe> --mode nicojk_wav -i <TS> [-s <ServiceId>] -o <WAV>`を実行し、WAVのJSONの内容を返す。
     子プロセスの出力は、成功したときは警告・エラーの行と1行の要約だけ、失敗したときは要約と末尾30行を
@@ -55,7 +72,8 @@ def decode_amatsukaze(exe, ts_path, sid, wav_path):
         raise DecodeError(reason)
 
     try:
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                   env=child_env())
     except OSError as error:
         fail(f"デコーダーを起動できません: {error}")
     for line in process.stdout:
