@@ -132,7 +132,7 @@ class DirectTests(MakeRunner):
         self.assertEqual(len(report["comment_align"]["segments"]), 2)
 
     def test_置き換えでは基準のコメントだけで写った時刻が合う(self):
-        code, converted, log, report = self.make(self.api(), spans=[(0, SPLIT), (SPLIT + DELTA_CHANGE, DURATION)])
+        code, converted, log, report = self.make(self.api(), ["--mode", "replace"], spans=[(0, SPLIT), (SPLIT + DELTA_CHANGE, DURATION)])
         self.assertEqual(code, 0, log)
         self.assertFalse(report["merged"])
         self.assertTrue(texts(converted))

@@ -206,7 +206,7 @@ class AltFoundTests(AltRunner):
     def test_ref_tsでref_sidを省くとsオプションを付けずJSONのServiceIdを使う(self):
         self.prepare_wavs()
         reference = self.add_recording()
-        code, _, log, report = self.run_alt(["--ref-ts", reference])
+        code, _, log, report = self.run_alt(["--ref-ts", reference, "--mode", "replace"])
         self.assertEqual(code, 0, log)
         self.assertNotIn("-s", self.decoder_calls()[0])
         self.assertEqual([c[0] for c in self.api_calls], ["jk5"])

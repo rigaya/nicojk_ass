@@ -128,7 +128,7 @@ def build_parser():
                      help="--altで探す対象から除くファイル(対象の録画自身。繰り返し可)")
     ref.add_argument("--ref-ts", help="基準の録画(TS)。デコードして音声照合する")
     ref.add_argument("--mode", choices=("replace", "merge"),
-                     help="replaceは基準のコメントだけ、mergeは対象の局のコメントと統合する(既定はreplace)")
+                     help="replaceは基準のコメントだけ、mergeは対象の局のコメントと統合する(既定はmerge)")
     ref.add_argument("--timemap", help="基準から対象への時刻対応表(JSON)")
     ref.add_argument("--ref-wav", help="基準の音声(8kHz・16bitのWAV)。対象の音声と照合して対応表を作る")
 
@@ -208,7 +208,7 @@ def _validate_make(parser, args):
         parser.error("--altには--search-dirが必要です")
     if (args.search_dir or args.exclude) and not args.alt:
         parser.error("--search-dir/--excludeには--altが必要です")
-    args.mode = args.alt or args.mode or "replace"
+    args.mode = args.alt or args.mode or "merge"
     if args.ref_wav and not args.wav and not args.ts:
         parser.error("--ref-wavには--wavか--tsが必要です")
     if args.timemap or args.ref_wav or _is_comment_align(args):
