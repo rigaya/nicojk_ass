@@ -6,7 +6,7 @@ import sys
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_FLOOR, ROUND_HALF_UP
 
 from . import __version__
 from .net import ssl_context
@@ -277,3 +277,92 @@ def rebase_file_vpos(root, starttime, endtime):
     if not root.findall("chat"):
         log("警告: 範囲内のコメントは0件です")
     return ET.tostring(root, encoding="unicode")
+
+
+# ------------------------------------------------------------------ #
+# 過去ログと同じXML
+# ------------------------------------------------------------------ #
+
+# サーバー応答でよく並ぶ属性。これ以外は元の順で続ける。
+_SERVER_ATTRS = ("thread", "no", "vpos", "date", "date_usec", "user_id", "mail", "premium", "anonymity")
+_JST = 9 * 3600
+_DAY = 86400
+_THREAD_AT = 4 * 3600
+
+
+def jikkyo_thread_start(absolute):
+    """絶対時刻を含む実況スレッドの開始(4:00 JST)をUNIX秒で返す。"""
+    jst = Decimal(absolute) + _JST
+    midnight = (jst.to_integral_value(rounding=ROUND_FLOOR) // _DAY) * _DAY
+    if jst - midnight >= _THREAD_AT:
+        start_jst = midnight + _THREAD_AT
+    else:
+        start_jst = midnight - (24 - 4) * 3600
+    return start_jst - _JST
+
+
+def _split_unix(absolute):
+    """UNIX秒をdateとdate_usec(0以上1000000未満)に分ける。"""
+    absolute = Decimal(absolute)
+    date = int(absolute.to_integral_value(rounding=ROUND_FLOOR))
+    usec = int(((absolute - date) * 1000000).to_integral_value(rounding=ROUND_HALF_UP))
+    if usec >= 1000000:
+        date += 1
+        usec -= 1000000
+    return date, usec
+
+
+def server_vpos(absolute):
+    """4:00 JSTからのセンチ秒。過去ログAPIのvposと同じ基準。"""
+    delta = Decimal(absolute) - jikkyo_thread_start(absolute)
+    return int((delta * 100).to_integral_value(rounding=ROUND_HALF_UP))
+
+
+def _xml_escape(value, quote=False):
+    text = (value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+    if quote:
+        text = text.replace('"', "&quot;")
+    return text
+
+
+def format_server_comments(xml_str, origin):
+    """相対vposのコメントを、過去ログAPIと同じpacket/chatのXMLにする。
+
+    時刻0はorigin(対象の録画の先頭)。date/date_usecはその絶対時刻で、
+    元のdateがセンチ秒の丸めの範囲内ならそのまま残す。vposは4:00 JST基準に戻す。
+    他のアプリはvposではなくdate/date_usecで時刻を読む。"""
+    root = ET.fromstring(xml_str)
+    origin = Decimal(str(origin))
+    lines = ['<?xml version="1.0" encoding="UTF-8"?>', "<packet>"]
+    for chat in root.findall("chat"):
+        relative = chat.get("vpos")
+        if relative is None or not re.fullmatch(r"-?\d+", relative):
+            continue
+        reconstructed = origin + Decimal(relative) / 100
+        try:
+            original = comment_time(chat)
+        except ValueError:
+            original = None
+        # rebaseはセンチ秒へ丸めるので、ずれが半センチ秒以内なら元の受信時刻を保つ。
+        if original is not None and abs(original - reconstructed) <= Decimal("0.005"):
+            absolute = original
+        else:
+            absolute = reconstructed
+        date, usec = _split_unix(absolute)
+        chat.set("date", str(date))
+        chat.set("date_usec", str(usec))
+        chat.set("vpos", str(server_vpos(absolute)))
+        attrs = []
+        seen = set()
+        for name in _SERVER_ATTRS:
+            value = chat.get(name)
+            if value is not None:
+                attrs.append((name, value))
+                seen.add(name)
+        for name, value in chat.attrib.items():
+            if name not in seen:
+                attrs.append((name, value))
+        attr_text = "".join(f' {name}="{_xml_escape(value, quote=True)}"' for name, value in attrs)
+        lines.append(f"<chat{attr_text}>{_xml_escape(chat.text or '')}</chat>")
+    lines.append("</packet>")
+    return "\n".join(lines) + "\n"

@@ -633,6 +633,109 @@ class RealRenderTests(MakeRunner):
         self.assertIn(",55,", large.read_text(encoding="utf-8"))
 
 
+class ServerFormatTests(MakeRunner):
+    """過去ログと同じXML。4:00 JSTはUNIX秒1729969200(2024-10-27)。"""
+
+    THREAD = 1729969200
+
+    def test_スレッド開始は4時JSTで前日の深夜も含む(self):
+        self.assertEqual(comments.jikkyo_thread_start(self.THREAD), self.THREAD)
+        self.assertEqual(comments.jikkyo_thread_start(self.THREAD + 86400), self.THREAD + 86400)
+        self.assertEqual(comments.jikkyo_thread_start(self.THREAD - 1), self.THREAD - 86400)
+        self.assertEqual(comments.server_vpos(Decimal("1730000000.137660")), 3080014)
+
+    def test_丸めの範囲内は元のdateを残し範囲外は対象の時刻へ直す(self):
+        origin = self.THREAD
+        xml = ('<packet>'
+               '<chat thread="lv1" no="7" vpos="3080014" date="1730000000" date_usec="137660" '
+               'user_id="abc" mail="184" anonymity="1">あ&amp;い</chat>'
+               '<chat vpos="0" date="1" date_usec="0" score="0">先頭</chat>'
+               '<chat vpos="bad">捨てる</chat>'
+               '</packet>')
+        # vpos 3080014 は origin から 30800.14秒。元の時刻との差は0.00234秒なので残す。
+        text = comments.format_server_comments(xml, origin)
+        self.assertTrue(text.startswith('<?xml version="1.0" encoding="UTF-8"?>\n<packet>\n'))
+        self.assertTrue(text.endswith("</packet>\n"))
+        chats = ET.fromstring(text).findall("chat")
+        self.assertEqual(len(chats), 2)
+        self.assertEqual(chats[0].get("date"), "1730000000")
+        self.assertEqual(chats[0].get("date_usec"), "137660")
+        self.assertEqual(chats[0].get("vpos"), "3080014")
+        self.assertEqual(chats[0].get("thread"), "lv1")
+        self.assertEqual(chats[0].get("mail"), "184")
+        self.assertEqual(chats[0].text, "あ&い")
+        self.assertEqual(chats[1].get("date"), str(origin))
+        self.assertEqual(chats[1].get("date_usec"), "0")
+        self.assertEqual(chats[1].get("vpos"), "0")
+        self.assertEqual(chats[1].get("score"), "0")
+        before = comments.format_server_comments(
+            '<packet><chat vpos="0" date="1">深夜</chat></packet>', self.THREAD - 3600)
+        chat = ET.fromstring(before).find("chat")
+        self.assertEqual(chat.get("date"), str(self.THREAD - 3600))
+        self.assertEqual(chat.get("vpos"), "8280000")
+
+    def test_統合結果を過去ログのXMLで書きASSは作らない(self):
+        reference = self.write('<packet><chat thread="lv9" no="7" date="5005" date_usec="0" '
+                               'mail="184" user_id="ref">基準&amp;</chat></packet>', "ref.xml")
+        target = (f'<packet><chat thread="lv1" no="3" date="{self.THREAD + 2}" date_usec="250000" '
+                  'mail="184" user_id="tgt">対象</chat></packet>')
+        path = self.directory / "merged.xml"
+        report = self.directory / "report.json"
+        # 基準の5秒を、対象の先頭から30805秒(12:33:25 JST)へ写す。
+        code, converted, api, log = self.run_make(
+            ["make", "--start", str(self.THREAD), "--end", str(self.THREAD + 40000),
+             "--ref-start", "5000", "--ref-end", "5020", "--ref-comments-file", str(reference),
+             "--timemap", str(self.write('[[0, 20, 30800, 30820]]', "timemap.json")),
+             "--mode", "merge", "--channel", "jk1", "--comments-output", str(path),
+             "--report", str(report)],
+            fetch=lambda *a: target)
+        self.assertEqual(code, 0, log)
+        self.assertEqual(converted, [])
+        api.assert_called_once()
+        chats = ET.fromstring(path.read_text(encoding="utf-8")).findall("chat")
+        self.assertEqual([chat.text for chat in chats], ["対象", "基準&"])
+        self.assertEqual(chats[0].get("date"), str(self.THREAD + 2))
+        self.assertEqual(chats[0].get("date_usec"), "250000")
+        self.assertEqual(chats[0].get("vpos"), "225")
+        self.assertEqual(chats[1].get("date"), "1730000005")
+        self.assertEqual(chats[1].get("date_usec"), "0")
+        self.assertEqual(chats[1].get("vpos"), "3080500")
+        self.assertEqual(chats[1].get("thread"), "lv9")
+        data = json.loads(report.read_text(encoding="utf-8"))
+        self.assertEqual(data["comments_output"], str(path))
+        self.assertEqual(data["outputs"], [])
+        self.assertEqual(data["comments"], 2)
+        self.assertTrue(data["merged"])
+
+    def test_取得範囲をずらしたファイルは表示される絶対時刻で書く(self):
+        source = self.write('<packet><chat date="1000" date_usec="0" mail="184">本文</chat></packet>')
+        path = self.directory / "out.xml"
+        code, converted, api, log = self.run_make(
+            ["make", "--comments-file", str(source), "--start", "1000", "--end", "1100",
+             "--comments-start", "1000", "--comments-offset", "10",
+             "--comments-output", str(path)],
+            fetch=AssertionError("API呼び出し禁止"))
+        self.assertEqual(code, 0, log)
+        self.assertEqual(converted, [])
+        api.assert_not_called()
+        chat = ET.fromstring(path.read_text(encoding="utf-8")).find("chat")
+        self.assertEqual(chat.get("date"), "1010")
+        self.assertEqual(chat.get("date_usec"), "0")
+
+    def test_XMLとASSを同時に書ける(self):
+        source = self.write('<packet><chat date="101" date_usec="0">本文</chat></packet>')
+        xml_path = self.directory / "out.xml"
+        code, converted, _, log = self.run_make(
+            ["make", "--comments-file", str(source), "--start", "100", "--end", "110",
+             "--comments-start", "100", "--comments-output", str(xml_path)] + self.output(),
+            fetch=AssertionError("API呼び出し禁止"))
+        self.assertEqual(code, 0, log)
+        self.assertEqual(len(converted), 1)
+        chat = ET.fromstring(xml_path.read_text(encoding="utf-8")).find("chat")
+        self.assertEqual(chat.get("date"), "101")
+        self.assertEqual(chat.get("date_usec"), "0")
+
+
 class CommandLineTests(TempDirTestCase):
     def test_versionを表示する(self):
         result = subprocess.run([sys.executable, str(ENTRY), "--version"], capture_output=True, text=True)

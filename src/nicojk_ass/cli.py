@@ -14,8 +14,8 @@ from decimal import Decimal, InvalidOperation
 from . import __version__, align_comment, decoder, stations, tsinfo
 from .comments import (DEFAULT_API_BASE, EXIT_CHANNEL_NOT_FOUND, EXIT_ERROR, EXIT_SUCCESS,
                        NicoJKExit, count_chats, fetch_api_comments, fetch_target_comments,
-                       file_reference, inspect_comments, log, parse_time, read_comments_file,
-                       rebase_file_vpos)
+                       file_reference, format_server_comments, inspect_comments, log, parse_time,
+                       read_comments_file, rebase_file_vpos)
 from .finder import Finder
 from .render import (DEFAULT_DURATION, DEFAULT_FONT, DEFAULT_OPACITY, default_fontsize,
                      fixup_ass, run_danmaku2ass)
@@ -133,8 +133,12 @@ def build_parser():
     ref.add_argument("--ref-wav", help="基準の音声(8kHz・16bitのWAV)。対象の音声と照合して対応表を作る")
 
     out = make.add_argument_group("出力")
-    out.add_argument("--output", action="append", type=_output_arg, required=True, metavar="WxH=PATH",
+    out.add_argument("--output", action="append", type=_output_arg, metavar="WxH=PATH",
                      help="解像度ごとのASSの出力先(繰り返し可)")
+    out.add_argument("--comments-output", metavar="PATH",
+                     help="統合などの結果を、ニコニコ実況の過去ログと同じXMLで書き出す。"
+                          "他のアプリはdateとdate_usecを対象の録画の時刻として読む。"
+                          "これだけを指定したときはASSを作らない")
     out.add_argument("--font", default=DEFAULT_FONT, help=f"フォント名 (既定: {DEFAULT_FONT!r})")
     out.add_argument("--fontsize", type=int, help="フォントサイズ(省略時は解像度から自動算出)")
     out.add_argument("--display-seconds", type=float, default=DEFAULT_DURATION,
@@ -182,6 +186,8 @@ def _is_comment_align(args):
 
 
 def _validate_make(parser, args):
+    if not args.output and not args.comments_output:
+        parser.error("--outputか--comments-outputを指定してください")
     if args.ts:
         if args.start is not None or args.end is not None:
             parser.error("--tsと--start/--endは同時に指定できません")
@@ -670,6 +676,18 @@ def _make_timemap(args, report, timemap, source="timemap", reference_xml=None, t
     return xml_str
 
 
+def _write_comments_output(args, xml_str):
+    """相対vposのコメントを、過去ログと同じXMLで書く。"""
+    try:
+        text = format_server_comments(xml_str, args.start)
+        with open(args.comments_output, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+    except (OSError, ET.ParseError, ValueError) as error:
+        log(f"コメントの書き出し失敗: {error}")
+        raise NicoJKExit(EXIT_ERROR)
+    log(f"コメント出力完了: {args.comments_output}")
+
+
 def _render_outputs(args, xml_str):
     """XMLを一時ファイルに書き、解像度ごとにdanmaku2assで配置してASSを後処理する。"""
     with tempfile.NamedTemporaryFile(
@@ -702,7 +720,9 @@ def _run_make(args, work):
               "target": {"sid": args.sid, "channel": f"jk{args.channel}" if args.channel else None,
                          "start": args.start, "end": args.end,
                          "program_start": args.program_start},
-              "outputs": [path for _, _, path in args.output]}
+              "outputs": [path for _, _, path in args.output] if args.output else []}
+    if args.comments_output:
+        report["comments_output"] = args.comments_output
     try:
         _apply_ts_target(args, report, work)
         spans = None
@@ -745,7 +765,10 @@ def _run_make(args, work):
                 args.mode = "replace"
             xml_str = _make_normal(args, report)
         report["comments"] = count_chats(xml_str)
-        _render_outputs(args, xml_str)
+        if args.comments_output:
+            _write_comments_output(args, xml_str)
+        if args.output:
+            _render_outputs(args, xml_str)
     except NicoJKExit as error:
         report["exit_code"] = error.code
         report.setdefault("reason", "channel_not_found" if error.code == EXIT_CHANNEL_NOT_FOUND else "error")
