@@ -44,17 +44,17 @@ class CheckVersionTests(unittest.TestCase):
             with self.subTest(bad=bad):
                 result = self.run_check(bad)
                 self.assertEqual(result.returncode, 1)
-                self.assertIn("形が正しくありません", result.stderr)
+                self.assertIn("wrong form", result.stderr)
 
     def test_既存のタグと同じ版はエラー(self):
         result = self.run_check("0.03", ["0.03"])
         self.assertEqual(result.returncode, 1)
-        self.assertIn("すでにあります", result.stderr)
+        self.assertIn("already exists", result.stderr)
 
     def test_既存の最大より小さい版はエラー(self):
         result = self.run_check("0.02", ["0.01", "0.10"])
         self.assertEqual(result.returncode, 1)
-        self.assertIn("大きくありません", result.stderr)
+        self.assertIn("not greater", result.stderr)
 
     def test_数としての大小で比べる(self):
         self.assertEqual(self.run_check("0.10", ["0.09"]).returncode, 0)

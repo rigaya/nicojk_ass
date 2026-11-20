@@ -22,7 +22,7 @@ REFERENCE_TOLERANCE_SECONDS = 5 * 60
 MAX_TS_FILES = 78
 FIRST_PASS_TS_FILES = 3
 JST = timezone(timedelta(hours=9))
-_PREFIX = "別局実況: "
+_PREFIX = "alt: "
 
 
 def parse_jst(text):

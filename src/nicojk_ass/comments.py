@@ -275,7 +275,7 @@ def rebase_file_vpos(root, starttime, endtime):
     if removed:
         log(f"範囲外のコメントを{removed}件除外")
     if not root.findall("chat"):
-        log("警告: 範囲内のコメントは0件です")
+        log("warning: 0 comments in range")
     return ET.tostring(root, encoding="unicode")
 
 

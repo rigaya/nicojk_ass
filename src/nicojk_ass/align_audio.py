@@ -178,7 +178,7 @@ def align_audio(target8k, reference8k):
         covered_end = max(covered_end, segment["end"])
     result["success"] = matched >= target_duration * 0.5 and bool(result["segments"])
     if not result["success"]:
-        result["reason"] = "一致した区間が対象の長さの5割未満です"
+        result["reason"] = "matched span is under half the target length"
     result["seconds"] = time.perf_counter() - begin
     return result
 

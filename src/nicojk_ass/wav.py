@@ -31,7 +31,7 @@ def read_wav(path):
                 raise ValueError(f"PCMのWAVではありません: {path}")
             data = source.readframes(source.getnframes())
     except wave.Error as error:
-        raise ValueError(f"WAVを読めません: {path}: {error}")
+        raise ValueError(f"cannot read WAV: {path}: {error}")
     return _resample(_decode_pcm(data, channels, width), rate)
 
 

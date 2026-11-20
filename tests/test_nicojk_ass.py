@@ -1,4 +1,5 @@
 import contextlib
+import unicodedata
 import io
 import json
 import os
@@ -86,7 +87,7 @@ class StationsTests(unittest.TestCase):
     def test_ServiceIdからjk番号と局名を引く(self):
         jk, name = stations.lookup_jk(211)
         self.assertEqual(jk, 211)
-        self.assertIn("ＢＳ１１", name)
+        self.assertIn("BS11", unicodedata.normalize("NFKC", name))
 
     def test_表にないServiceIdはNone(self):
         self.assertIsNone(stations.lookup_jk(99999))
@@ -239,7 +240,7 @@ class FileSourceTests(MakeRunner):
                                  "--output", f"1280x720={self.directory / 'result.ass'}"],
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 1)
-        self.assertIn("読み込み失敗", result.stderr)
+        self.assertIn("failed to read the comment file", result.stderr)
 
     def test_comments_startがなければ録画の範囲に半数以上入るとき番組開始に合わせる(self):
         path = self.write('<packet><chat date="1005">a</chat><chat date="1006">b</chat>'
@@ -248,7 +249,7 @@ class FileSourceTests(MakeRunner):
             ["make", "--comments-file", str(path), "--start", "1000", "--end", "1010"] + self.output())
         self.assertEqual(code, 0)
         self.assertEqual(self.converted_vpos(converted), [["500", "600"]])
-        self.assertNotIn("最初のコメントを番組開始に合わせます", log)
+        self.assertNotIn("aligning the first comment to the program start", log)
 
     def test_comments_startがなく範囲外ばかりなら最初のコメントを番組開始に合わせて警告する(self):
         path = self.write('<packet><chat date="5000">a</chat><chat date="5003" date_usec="500000">b</chat>'
@@ -258,7 +259,7 @@ class FileSourceTests(MakeRunner):
         self.assertEqual(code, 0)
         # 取得範囲は最初のコメント(5000)から10秒
         self.assertEqual(self.converted_vpos(converted), [["0", "350", "400"]])
-        self.assertIn("最初のコメントを番組開始に合わせます", log)
+        self.assertIn("aligning the first comment to the program start", log)
 
     def test_comments_startとoffsetで取得範囲がずれる(self):
         path = self.write('<packet><chat date="1000">a</chat><chat date="1001">b</chat></packet>')
@@ -278,7 +279,7 @@ class FileSourceTests(MakeRunner):
         self.assertEqual(code, 0)
         api.assert_called_once_with("jk9", 100, 110, comments.DEFAULT_API_BASE)
         self.assertEqual(self.converted_vpos(converted), [["100"]])
-        self.assertIn("無視します", log)
+        self.assertIn("ignoring the file", log)
 
     def test_自動で見つけたファイルでもコメントがあれば使う(self):
         path = self.write('<packet><chat date="101">本文</chat></packet>')
@@ -297,7 +298,7 @@ class FileSourceTests(MakeRunner):
         self.assertEqual(code, 0)
         api.assert_not_called()
         self.assertEqual(self.converted_vpos(converted), [[]])
-        self.assertIn("0件", log)
+        self.assertIn("0 comments", log)
 
     def test_自動のファイルを捨てて通常の取得に進んでも局がなければ100(self):
         path = self.write('<packet/>')
@@ -413,7 +414,7 @@ class TimeMapTests(MakeRunner):
         return path
 
     def write_comments(self):
-        return self.write('<packet><chat date="1001" no="42" user_id="same">同じ本文</chat>'
+        return self.write('<packet><chat date="1001" no="42" user_id="same">same text</chat>'
                           '<chat date="1003" no="99">後半</chat></packet>')
 
     def args(self, extra):
@@ -443,13 +444,13 @@ class TimeMapTests(MakeRunner):
         self.assertEqual(len(ET.fromstring(timemap.apply_timemap('<packet><chat vpos="0"/></packet>', []))), 0)
 
     def test_統合は時刻順で既存番号と重複を残す(self):
-        reference = '<packet><chat vpos="300" no="42" user_id="same">同じ本文</chat>' \
+        reference = '<packet><chat vpos="300" no="42" user_id="same">same text</chat>' \
                     '<chat vpos="100" no="7">基準</chat></packet>'
-        target = '<packet><chat vpos="100" no="42" user_id="same">同じ本文</chat></packet>'
+        target = '<packet><chat vpos="100" no="42" user_id="same">same text</chat></packet>'
         result = ET.fromstring(timemap.merge_comments(reference, target)).findall("chat")
         self.assertEqual([chat.get("vpos") for chat in result], ["100", "100", "300"])
         self.assertEqual([chat.get("no") for chat in result], ["7", "42", "42"])
-        self.assertEqual(sum(chat.text == "同じ本文" for chat in result), 2)
+        self.assertEqual(sum(chat.text == "same text" for chat in result), 2)
 
     def test_基準の色の指定で基準だけ末尾に色を足す(self):
         reference = '<packet><chat vpos="100" mail="red ue big blue2 #112233">基準</chat>' \
@@ -511,7 +512,7 @@ class TimeMapTests(MakeRunner):
         self.assertEqual(code, 0)
         self.assertEqual([chat.text for chat in converted[0][3]], ["対象"])
         self.assertEqual([call.args[0] for call in api.call_args_list], ["jk9", "jk1"])
-        self.assertIn("基準の局のコメントを取得できない", log)
+        self.assertIn("comments could not be fetched", log)
 
     def test_ref_sidで基準の局を引く(self):
         _, _, api, _ = self.run_make(
@@ -520,7 +521,7 @@ class TimeMapTests(MakeRunner):
         api.assert_called_once_with("jk211", 1000, 1010, comments.DEFAULT_API_BASE)
 
     def test_統合する対象も既存API経路を使い配置前に混ぜる(self):
-        target = ('<packet><chat date="201" vpos="500" no="42" user_id="same">同じ本文</chat>'
+        target = ('<packet><chat date="201" vpos="500" no="42" user_id="same">same text</chat>'
                   '<chat date="203" vpos="700" no="88">対象後半</chat></packet>')
         argv = self.args(["--ref-comments-file", str(self.write_comments()),
                           "--timemap", str(self.write_map([[0, 10, 2, 12]])),
@@ -531,7 +532,7 @@ class TimeMapTests(MakeRunner):
         self.assertEqual(code, 0)
         self.assertEqual([chat.get("vpos") for chat in chats], ["100", "300", "300", "500"])
         self.assertEqual([chat.get("no") for chat in chats], ["42", "42", "88", "99"])
-        self.assertEqual(sum(chat.text == "同じ本文" for chat in chats), 2)
+        self.assertEqual(sum(chat.text == "same text" for chat in chats), 2)
         api.assert_called_once_with("jk1", 200, 210, comments.DEFAULT_API_BASE)
         rebase.assert_called_once_with(target, 200)
 
@@ -542,7 +543,7 @@ class TimeMapTests(MakeRunner):
         code, converted, _, log = self.run_make(argv, fetch=comments.NicoJKExit(100))
         self.assertEqual(code, 0)
         self.assertEqual([chat.get("vpos") for chat in converted[0][3]], ["100", "300"])
-        self.assertIn("未対応", log)
+        self.assertIn("unsupported", log)
         code, converted, _, _ = self.run_make(argv, fetch=comments.NicoJKExit(1))
         self.assertEqual(code, 1)
         self.assertEqual(converted, [])
@@ -555,7 +556,7 @@ class TimeMapTests(MakeRunner):
         self.assertEqual(code, 0)
         api.assert_not_called()
         self.assertEqual(len(converted[0][3]), 2)
-        self.assertIn("対象の局に実況チャンネルがない", log)
+        self.assertIn("target channel has no live comments", log)
 
     def test_基準の局にjk番号がなければ通常の取得に戻る(self):
         source = '<packet><chat date="201" no="1">対象</chat></packet>'
@@ -565,7 +566,7 @@ class TimeMapTests(MakeRunner):
         self.assertEqual(code, 0)
         api.assert_called_once_with("jk1", 200, 210, comments.DEFAULT_API_BASE)
         self.assertEqual([chat.get("vpos") for chat in converted[0][3]], ["100"])
-        self.assertIn("基準を使いません", log)
+        self.assertIn("not using the reference", log)
 
     def test_対応表の読み込み失敗は1(self):
         code, converted, _, _ = self.run_make(
@@ -586,14 +587,14 @@ class TimeMapTests(MakeRunner):
                      if line.startswith("Dialogue:")]
         self.assertEqual(len(dialogues), 1)
         self.assertIn(",0:00:03.00,", dialogues[0])
-        self.assertIn("同じ本文", dialogues[0])
+        self.assertIn("same text", dialogues[0])
 
 
 class RealRenderTests(MakeRunner):
     def test_noなしXMLとJKLも実変換でASSに残る(self):
         for suffix in ("xml", "jkl"):
             with self.subTest(suffix=suffix):
-                body = '<chat date="101">番号なしのコメント</chat>'
+                body = '<chat date="101">comment without a number</chat>'
                 contents = '<packet>' + body + '</packet>' if suffix == "xml" else '<!-- NicoJK -->\n' + body
                 path = self.write(contents, "comments." + suffix)
                 output = self.directory / (suffix + ".ass")
@@ -606,7 +607,7 @@ class RealRenderTests(MakeRunner):
                             if line.startswith("Dialogue:")]
                 self.assertEqual(len(dialogue), 1)
                 self.assertIn(",0:00:01.00,", dialogue[0])
-                self.assertIn("番号なしのコメント", dialogue[0])
+                self.assertIn("comment without a number", dialogue[0])
 
     def test_複数のoutputがそれぞれの解像度のASSになる(self):
         path = self.write('<packet><chat date="101">本文</chat></packet>')

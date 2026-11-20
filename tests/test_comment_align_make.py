@@ -112,7 +112,7 @@ class DirectTests(MakeRunner):
         self.assertEqual([round(part["delta"]) for part in detail["segments"]], [OFFSET, OFFSET - DELTA_CHANGE])
         self.assertEqual(report["source"], "comment_align")
         self.assertTrue(report["merged"])
-        self.assertIn("コメント照合区間", log)
+        self.assertIn("comment alignment span", log)
         self.assertEqual(api.calls, ["jk151", "jk5"])  # 対象の局の取得は1回
         # 統合: 基準の局(！！)も対象の局(ｗｗｗ)も出る
         self.assertTrue(any(t.endswith("！！") for t in texts(converted)))
@@ -157,7 +157,7 @@ class DirectTests(MakeRunner):
         code, converted, log, report = self.make(api, ["--mode", "merge"], spans=[(0, DURATION)])
         self.assertEqual(code, 0, log)
         self.assertEqual(report["comment_align"]["segments"], [])
-        self.assertIn("推定できませんでした", report["comment_align"]["reason"])
+        self.assertIn("could not estimate", report["comment_align"]["reason"])
         self.assertTrue(report["reference_fallback"])
         self.assertEqual(report["source"], "api")
         self.assertTrue(all(t.endswith("ｗｗｗ") or t == "草" for t in texts(converted)))
@@ -168,7 +168,7 @@ class DirectTests(MakeRunner):
         api = Api({"jk151": target[:20], "jk5": reference})
         code, converted, log, report = self.make(api)
         self.assertEqual(code, 0, log)
-        self.assertIn("コメントが少なすぎます", report["comment_align"]["reason"])
+        self.assertIn("too few comments", report["comment_align"]["reason"])
         self.assertEqual(len(texts(converted)), 20)
         self.assertEqual(report["comment_align"]["segments"], [])
 
@@ -176,7 +176,7 @@ class DirectTests(MakeRunner):
         api = self.api(failures={"jk5"})
         code, converted, log, report = self.make(api, ["--mode", "merge"], spans=[(0, DURATION)])
         self.assertEqual(code, 0, log)
-        self.assertIn("基準の局のコメントを取得できません", report["comment_align"]["reason"])
+        self.assertIn("could not fetch reference channel comments", report["comment_align"]["reason"])
         self.assertTrue(report["reference_fallback"])
         self.assertTrue(all(t.endswith("ｗｗｗ") or t == "草" for t in texts(converted)))
 
@@ -202,7 +202,7 @@ class DirectTests(MakeRunner):
     def test_基準の局と時刻の指定の誤りを拒否する(self):
         for argv, message in ((["--ref-sid", "1064"], "--ref-start"),
                               (["--ref-start", "100", "--ref-end", "200"], "--ref-sid"),
-                              (["--ref-sid", "1064", "--ref-start", "200", "--ref-end", "100"], "より後")):
+                              (["--ref-sid", "1064", "--ref-start", "200", "--ref-end", "100"], "must be after")):
             with self.subTest(argv=argv), self.assertRaises(SystemExit):
                 err = io.StringIO()
                 with contextlib.redirect_stderr(err):
@@ -290,12 +290,12 @@ class AltTests(AltRunner):
         self.assertEqual(code, 0, log)
         detail = report["comment_align"]
         self.assertEqual([c["sid"] for c in detail["candidates"]], [333, 1064])
-        self.assertIn("コメントが少なすぎます", detail["candidates"][0]["skipped"])
+        self.assertIn("too few comments", detail["candidates"][0]["skipped"])
         self.assertIsNone(detail["candidates"][1]["skipped"])
         self.assertEqual(report["reference"]["channel"], "jk5")
         self.assertEqual(detail["reference"]["sid"], 1064)
         self.assertEqual(detail["center"], EARLIER - TARGET)
-        self.assertIn("方式D: 候補 sid 333 を飛ばします", log)
+        self.assertIn("method D: skipping candidate sid 333", log)
         self.assertGreaterEqual(len(detail["segments"]), 1)
         self.assertEqual([c[0] for c in self.api_calls], ["jk151", "jk333", "jk5"])  # 対象は1回だけ
 
@@ -319,7 +319,7 @@ class AltTests(AltRunner):
         detail = report["comment_align"]
         self.assertEqual([c["sid"] for c in detail["candidates"]], [333])
         self.assertEqual(detail["segments"], [])
-        self.assertIn("推定できませんでした", detail["reason"])
+        self.assertIn("could not estimate", detail["reason"])
         self.assertNotIn("jk5", [c[0] for c in self.api_calls])
         self.assertTrue(report["reference_fallback"])
 

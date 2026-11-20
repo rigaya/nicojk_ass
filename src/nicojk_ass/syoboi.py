@@ -133,7 +133,7 @@ class SyoboiClient:
             if last is not None:
                 wait = min(last + REQUEST_INTERVAL_SECONDS - self.clock(), REQUEST_INTERVAL_SECONDS)
                 if wait > 0:
-                    self.log("別局実況: しょぼいカレンダーへの問い合わせ間隔を待機")
+                    self.log("alt: waiting for the Syoboi calendar request interval")
                     self.sleep(wait)
             _write_last_request(lock, self.clock())
             xml = self.fetch(url)

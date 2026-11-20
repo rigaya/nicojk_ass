@@ -74,12 +74,12 @@ def decode_amatsukaze(exe, ts_path, sid, wav_path):
     lines = collections.deque(maxlen=TAIL_LINES)  # 失敗したときに出す末尾だけを持つ
 
     def fail(reason):
-        log(f"基準の音声のデコードに失敗しました: {name} / sid {sid} / {reason}")
-        log("デコード: " + " ".join(command))
+        log(f"failed to decode reference audio: {name} / sid {sid} / {reason}")
+        log("decode: " + " ".join(command))
         if lines:
-            log(f"[デコーダー] 出力の末尾{len(lines)}行:")
+            log(f"[decoder] last {len(lines)} lines:")
             for text in lines:
-                log("[デコーダー] " + text)
+                log("[decoder] " + text)
         raise DecodeError(reason)
 
     try:
@@ -92,10 +92,10 @@ def decode_amatsukaze(exe, ts_path, sid, wav_path):
         if text:
             lines.append(text)
             if _PROBLEM_LINE.match(text):
-                log("[デコーダー] " + text)
+                log("[decoder] " + text)
     code = process.wait()
     if code != 0:
-        fail(f"デコーダーが終了コード{code}で終わりました")
+        fail(f"decoder exited with code {code}")
     try:
         with open(json_path, "r", encoding="utf-8") as file:
             info = json.load(file)
@@ -107,7 +107,7 @@ def decode_amatsukaze(exe, ts_path, sid, wav_path):
     if not os.path.exists(wav_path):
         fail("デコーダーがWAVを書きませんでした")
     result["seconds"] = round(time.monotonic() - began, 3)
-    log(f"基準の音声をデコードしました: {name} / sid {result['sid']} / 長さ {result['duration']:.1f}秒 / "
+    log(f"decoded reference audio: {name} / sid {result['sid']} / duration {result['duration']:.1f}s / "
         f"{result['seconds']:.1f}秒")
     return result
 

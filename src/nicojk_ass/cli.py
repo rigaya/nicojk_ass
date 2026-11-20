@@ -190,27 +190,27 @@ def _validate_make(parser, args):
         parser.error("--outputか--comments-outputを指定してください")
     if args.ts:
         if args.start is not None or args.end is not None:
-            parser.error("--tsと--start/--endは同時に指定できません")
+            parser.error("--ts and --start/--end cannot be used together")
     else:
         if args.start is None or args.end is None:
             parser.error("対象の時刻がありません。--startと--end、または--tsを指定してください")
         elif args.end <= args.start:
-            parser.error("--endは--startより後にしてください")
+            parser.error("--end must be after --start")
     if args.timemap and args.ref_wav:
-        parser.error("--timemapと--ref-wavは同時に指定できません")
+        parser.error("--timemap and --ref-wav cannot be used together")
     if args.alt and args.mode:
-        parser.error("--altと--modeは同時に指定できません(--altの値が使われます)")
+        parser.error("--alt and --mode cannot be used together (--alt's value is used)")
     if args.alt and args.ref_ts:
-        parser.error("--altと--ref-tsは同時に指定できません")
+        parser.error("--alt and --ref-ts cannot be used together")
     if (args.alt or args.ref_ts) and (args.timemap or args.ref_wav):
-        parser.error("--alt/--ref-tsと--timemap/--ref-wavは同時に指定できません")
+        parser.error("--alt/--ref-ts and --timemap/--ref-wav cannot be used together")
     if args.alt and not args.search_dir:
-        parser.error("--altには--search-dirが必要です")
+        parser.error("--alt requires --search-dir")
     if (args.search_dir or args.exclude) and not args.alt:
-        parser.error("--search-dir/--excludeには--altが必要です")
+        parser.error("--search-dir/--exclude require --alt")
     args.mode = args.alt or args.mode or "merge"
     if args.ref_wav and not args.wav and not args.ts:
-        parser.error("--ref-wavには--wavか--tsが必要です")
+        parser.error("--ref-wav requires --wav or --ts")
     if args.timemap or args.ref_wav or _is_comment_align(args):
         option = "--timemap" if args.timemap else "--ref-wav" if args.ref_wav else "基準の局と時刻(方式D)"
         if args.ref_start is None or args.ref_end is None:
@@ -219,20 +219,20 @@ def _validate_make(parser, args):
                              "または--ref-startと--ref-end(方式D)が必要です")
             parser.error(f"{option}には--ref-startと--ref-endが必要です")
         if args.ref_end <= args.ref_start:
-            parser.error("--ref-endは--ref-startより後にしてください")
+            parser.error("--ref-end must be after --ref-start")
         if args.ref_channel is None and args.ref_sid is None and not args.ref_comments_file:
             parser.error(f"{option}には--ref-sid、--ref-channel、--ref-comments-fileのどれかが必要です")
         if args.comments_file or args.comments_start is not None or args.comments_offset != 0:
-            parser.error(f"{option}と--comments-file/--comments-start/--comments-offsetは同時に指定できません")
+            parser.error(f"{option} and --comments-file/--comments-start/--comments-offset cannot be used together")
     elif args.alt or args.ref_ts:
         option = "--alt" if args.alt else "--ref-ts"
         if args.ref_start is not None or args.ref_end is not None or args.ref_channel is not None \
                 or (args.alt and args.ref_sid is not None):
-            parser.error(f"{option}と--ref-start/--ref-end/--ref-channel(--altでは--ref-sidも)は同時に指定できません")
+            parser.error(f"{option} and --ref-start/--ref-end/--ref-channel (and --ref-sid with --alt) cannot be used together")
         if args.ref_comments_file and args.alt:
-            parser.error("--altと--ref-comments-fileは同時に指定できません")
+            parser.error("--alt and --ref-comments-file cannot be used together")
         if args.comments_file or args.comments_start is not None or args.comments_offset != 0:
-            parser.error(f"{option}と--comments-file/--comments-start/--comments-offsetは同時に指定できません")
+            parser.error(f"{option} and --comments-file/--comments-start/--comments-offset cannot be used together")
     if args.comments_file_auto and not args.comments_file:
         parser.error("--comments-file-autoには--comments-fileが必要です")
     if args.fontsize is not None and args.fontsize <= 0:
@@ -277,7 +277,7 @@ def _read_file_comments(path, start, end):
     try:
         return _rebase_file_comments(read_comments_file(path), start, end)
     except (OSError, UnicodeError, ET.ParseError, ValueError) as error:
-        log(f"コメントファイルの読み込み失敗: {error}")
+        log(f"failed to read the comment file: {error}")
         raise NicoJKExit(EXIT_ERROR)
 
 
@@ -295,18 +295,18 @@ def _make_normal(args, report):
             root = read_comments_file(comments_file)
             count, first, overlap = inspect_comments(root, start, end)
         except (OSError, UnicodeError, ET.ParseError, ValueError) as error:
-            log(f"コメントファイルの読み込み失敗: {error}")
+            log(f"failed to read the comment file: {error}")
             raise NicoJKExit(EXIT_ERROR)
         if count == 0 and args.comments_file_auto:
-            log("警告: 同名ファイルはコメントファイルではないため無視します")
+            log("warning: ignoring the file because it is not a comment file")
             comments_file = None
             report["comments_file_ignored"] = True
         elif count and comments_start is None:
             comments_start = file_reference(program, first, count, overlap)
             relative = overlap < (count + 1) // 2
             if relative:
-                log("警告: 最初のコメントを番組開始に合わせます。"
-                    "正確に合わせるには--comments-startを指定してください")
+                log("warning: aligning the first comment to the program start. "
+                    "Pass --comments-start to set it exactly")
 
     reference = Decimal(str(comments_start)) if comments_start is not None else Decimal(str(program))
     fetch_start = _normalize(Decimal(str(start)) + (reference - Decimal(str(program))) - args.comments_offset)
@@ -337,23 +337,23 @@ def _align_audio(args, report):
         from .align_audio import align_audio, make_timemap
         from .wav import read_wav
     except ImportError as error:
-        log(f"実況音声照合に失敗したため対象局へ戻ります: numpyを読み込めません: {error}")
+        log(f"audio alignment failed, falling back to the target channel: cannot import numpy: {error}")
         report["align"] = {"success": False, "reason": f"numpyを読み込めません: {error}", "segments": [], "seconds": 0}
         return None
     try:
         target, reference = read_wav(args.wav), read_wav(args.ref_wav)
     except (OSError, ValueError) as error:
-        log(f"実況音声照合に失敗したため対象局へ戻ります: {error}")
+        log(f"audio alignment failed, falling back to the target channel: {error}")
         report["align"] = {"success": False, "reason": str(error), "segments": [], "seconds": 0}
         return None
     result = align_audio(target, reference)
     report["align"] = {key: result[key] for key in ("success", "reason", "segments", "seconds")}
-    log(f"実況音声照合: 基準 {args.ref_wav} / 照合 {result['seconds']:.3f}秒 / 区間 {len(result['segments'])}")
+    log(f"audio alignment: reference {args.ref_wav} / took {result['seconds']:.3f}s / spans {len(result['segments'])}")
     for part in result["segments"]:
         log(f"実況照合区間: {part['start']:.3f}～{part['end']:.3f}秒 / 基準－対象 {part['delta']:+.3f}秒 / "
             f"プローブ{part['probes']}本 / 相関比{part['ratio']:.3f}")
     if not result["success"]:
-        log(f"実況音声照合に失敗したため対象局へ戻ります: {result['reason']}")
+        log(f"audio alignment failed, falling back to the target channel: {result['reason']}")
         return None
     # 対応表の長さは、WAVの長さ(これまでのネイティブ版が渡していた録画の長さと同じ)を使う。
     return make_timemap(result["segments"], len(target) / 8000, len(reference) / 8000)
@@ -460,7 +460,7 @@ def _decode_reference(args, report, work, ts_path, sid):
         report["decode"] = {"success": False, "reason": "--wavがありません"}
         return False
     if args.decoder is None:
-        log("警告: --decoderがないため基準の録画をデコードできません")
+        log("warning: cannot decode the reference recording without --decoder")
         report["decode"] = {"success": False, "reason": "--decoderがありません"}
         return False
     wav = work.file("reference.wav")
@@ -472,7 +472,7 @@ def _decode_reference(args, report, work, ts_path, sid):
         return False
     report["decode"] = {"success": True, "ts": ts_path, "wav": wav, **info}
     if not info["has_time"]:
-        log("警告: 基準の録画にTOTがなく先頭の時刻を求められないため基準を使いません")
+        log("warning: not using the reference because it has no TOT and the start time is unknown")
         report["decode"]["success"] = False
         report["decode"]["reason"] = "TOTがありません"
         return False
@@ -510,7 +510,7 @@ def _prepare_reference(args, report, work):
             report["decode"] = {"success": False, "reason": "--wavがありません"}
         return None
     log(("基準の録画があっても対象の音声(--wav)がないため、" if reference is not None else "基準の録画がないため、")
-        + "候補のコメントで方式Dを使います")
+        + "using method D on the candidate comments")
     args.ref_candidates = plan["candidates"]
     return "comment"
 
@@ -531,7 +531,7 @@ def _align_comments(args, report, spans):
         log("対象の局に実況チャンネルがありません")
         report["reason"] = "no_channel"
         raise NicoJKExit(EXIT_CHANNEL_NOT_FOUND)
-    log(f"コメント取得元: API / jk{jk} / 取得範囲 {start} ～ {end} / 方式D")
+    log(f"comment source: API / jk{jk} / range {start} - {end} / method D")
     target_xml = fetch_api_comments(f"jk{jk}", start, end, args.api_url)
     report["fetch"] = {"channel": f"jk{jk}", "file": None, "start": start, "end": end, "relative": False}
     try:
@@ -551,7 +551,7 @@ def _align_comments(args, report, spans):
     if len(target_rows) < params["min_comments"]:
         # 対象の局のコメントが足りなければ、どの候補でも推定できないので基準のコメントを取りに行かない。
         detail["target_comments"] = len(target_rows)
-        return fall_back(f"対象の局のコメントが少なすぎます({len(target_rows)}件)")
+        return fall_back(f"too few comments on the target channel ({len(target_rows)})")
     # --altでは、候補を放送の早い順に見て、基準のコメントが十分にある最初の候補で推定する。
     # 直接指定(--ref-sidなど)の候補は1つだけ。
     candidates = getattr(args, "ref_candidates", None)
@@ -579,16 +579,16 @@ def _align_comments(args, report, spans):
                 reference_rows = align_comment.comments_from_xml(reference_xml, float(ref_origin), float(ref_limit))
                 entry["comments"] = len(reference_rows)
                 if not align_comment.enough_comments(target_rows, reference_rows, params):
-                    reason = f"コメントが少なすぎます(対象{len(target_rows)}件・基準{len(reference_rows)}件)"
+                    reason = f"too few comments (target {len(target_rows)}, reference {len(reference_rows)})"
         except (NicoJKExit, ET.ParseError, ValueError) as error:
-            reason = f"基準の局のコメントを取得できません: {error}"
+            reason = f"could not fetch reference channel comments: {error}"
         if reason is None:
             break
         entry["skipped"] = reason
         skipped.append(reason)
         reference_xml = None
         if len(candidates) > 1:
-            log(f"方式D: 候補 sid {args.ref_sid} を飛ばします: {reason}")
+            log(f"method D: skipping candidate sid {args.ref_sid}: {reason}")
     if reference_xml is None:
         return fall_back("; ".join(skipped))
     center = float(args.ref_start) - float(program)
@@ -613,10 +613,10 @@ def _align_comments(args, report, spans):
     log(f"コメント照合: 対象{len(target_rows)}件・基準{len(reference_rows)}件 / 本編の区間 "
         + ("あり" if spans else "なし") + f" / 照合 {detail['seconds']:.3f}秒 / 区間 {len(found)}")
     for part in found:
-        log(f"コメント照合区間: {part['start']:.3f}～{part['end']:.3f}秒 / 基準－対象 {part['delta']:+.3f}秒 / "
+        log(f"comment alignment span: {part['start']:.3f}-{part['end']:.3f}s / reference-target {part['delta']:+.3f}s / "
             f"山の比{part['ratio']:.2f} / 一致{part.get('support', 0)}件")
     if not found or not timemap:
-        return fall_back("どの区間のずれも推定できませんでした")
+        return fall_back("could not estimate a shift for any span")
     return _make_timemap(args, report, timemap, "comment_align", reference_xml, target_xml)
 
 
@@ -636,13 +636,13 @@ def _make_timemap(args, report, timemap, source="timemap", reference_xml=None, t
     else:
         ref_jk, _ = _resolve_jk(args.ref_sid, args.ref_channel)
         if ref_jk is None:
-            log("警告: 基準の局に実況チャンネルがないため基準を使いません")
+            log("warning: not using the reference because the reference channel has no live comments")
             return None
         try:
             xml_str = fetch_api_comments(f"jk{ref_jk}", ref_start, ref_end, args.api_url)
         except (NicoJKExit, ET.ParseError, ValueError) as error:
             # 基準のコメントを取れないときは、ジョブを失敗させずに対象の局のコメントへ戻る。
-            log(f"警告: 基準の局のコメントを取得できないため基準を使いません: {error}")
+            log(f"warning: not using the reference because its comments could not be fetched: {error}")
             return None
     report["source"] = source
     report["reference"] = {"channel": f"jk{ref_jk}" if ref_jk else None,
@@ -657,7 +657,7 @@ def _make_timemap(args, report, timemap, source="timemap", reference_xml=None, t
                 xml_str = merge_comments(xml_str, target_xml, args.mark_reference_color)
                 report["merged"] = True
             elif jk is None:
-                log("警告: 対象の局に実況チャンネルがないため基準のコメントだけを使います")
+                log("warning: using only reference comments because the target channel has no live comments")
             else:
                 try:
                     target_xml = fetch_target_comments(f"jk{jk}", _normalize(args.start),
@@ -666,7 +666,7 @@ def _make_timemap(args, report, timemap, source="timemap", reference_xml=None, t
                     # API側の400/404でも基準のコメントは使い続ける。
                     if error.code != EXIT_CHANNEL_NOT_FOUND:
                         raise
-                    log("警告: 対象局のチャンネルが未対応のため基準のコメントだけを使います")
+                    log("warning: using only reference comments because the target channel is unsupported")
                 else:
                     xml_str = merge_comments(xml_str, target_xml, args.mark_reference_color)
                     report["merged"] = True

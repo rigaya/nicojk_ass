@@ -207,7 +207,7 @@ class FindTests(FinderTestCase):
         self.assertEqual(f.find(), reference)
         self.assertEqual(len(f.request_times), 3)
         self.assertEqual(len(f.delays), 2)
-        self.assertTrue(any("待" in line for line in f.logs))
+        self.assertTrue(any("waiting" in line for line in f.logs))
 
     def test_通信で経過した時間を待機時間から引く(self):
         f = self.f

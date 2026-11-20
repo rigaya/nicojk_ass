@@ -65,14 +65,14 @@ def verify(exe, version):
     """できたexeの--versionが版と合うことを確かめる。"""
     out = subprocess.run([exe, "--version"], capture_output=True, text=True, check=True).stdout.strip()
     if out != f"nicojk_ass {version}":
-        raise SystemExit(f"エラー: {exe} の--versionが '{out}' です(期待: nicojk_ass {version})")
-    print(f"確認: {exe}: {out}", flush=True)
+        raise SystemExit(f"error: {exe} --version is '{out}' (expected: nicojk_ass {version})")
+    print(f"verified: {exe}: {out}", flush=True)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="exeを作る")
-    parser.add_argument("--work", default=os.path.join(ROOT, "build"), help="作業用のフォルダ(作り直す)")
-    parser.add_argument("--dist", default=os.path.join(ROOT, "dist"), help="exeの出力先")
+    parser = argparse.ArgumentParser(description="Build the executable")
+    parser.add_argument("--work", default=os.path.join(ROOT, "build"), help="work directory (recreated)")
+    parser.add_argument("--dist", default=os.path.join(ROOT, "dist"), help="directory for the executable")
     args = parser.parse_args()
 
     version = read_version()

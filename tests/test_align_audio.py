@@ -291,14 +291,14 @@ class MakeRefWavTests(MakeRunner):
         self.assertTrue(report["align"]["success"])
         self.assertEqual(len(report["align"]["segments"]), 1)
         self.assertAlmostEqual(report["align"]["segments"][0]["delta"], 10, delta=0.01)
-        self.assertIn("実況音声照合:", log)
+        self.assertIn("audio alignment:", log)
 
     def test_照合に失敗したら警告して対象局の通常の取得へ戻る(self):
         argv = self.prepare(lambda audio: noise(90, 9)) + ["--sid", "211"]
         code, converted, api, log = self.run_make(
             argv, fetch=lambda *a: '<packet><chat date="201" no="1">対象</chat></packet>')
         self.assertEqual(code, 0)
-        self.assertIn("実況音声照合に失敗したため対象局へ戻ります: 一致した区間が対象の長さの5割未満です", log)
+        self.assertIn("audio alignment failed, falling back to the target channel: matched span is under half the target length", log)
         api.assert_called_once()
         self.assertEqual(api.call_args.args[0], "jk211")
         self.assertEqual([chat.text for chat in converted[0][3]], ["対象"])
@@ -311,13 +311,13 @@ class MakeRefWavTests(MakeRunner):
         (self.directory / "ref.wav").write_bytes(b"not a wav")
         code, converted, api, log = self.run_make(argv, fetch=lambda *a: "<packet/>")
         self.assertEqual(code, 0)
-        self.assertIn("実況音声照合に失敗したため対象局へ戻ります: WAVを読めません", log)
+        self.assertIn("audio alignment failed, falling back to the target channel: cannot read WAV", log)
         api.assert_called_once()
 
     def test_引数の組み合わせの誤りを拒否する(self):
         base = self.prepare(lambda audio: audio)
-        for extra, message in ((["--timemap", "x.json"], "同時に指定できません"),
-                               (["--comments-file", "c.xml"], "同時に指定できません")):
+        for extra, message in ((["--timemap", "x.json"], "cannot be used together"),
+                               (["--comments-file", "c.xml"], "cannot be used together")):
             with self.subTest(extra=extra), contextlib.redirect_stderr(io.StringIO()) as err:
                 with self.assertRaises(SystemExit):
                     cli.main(base + extra)
@@ -326,7 +326,7 @@ class MakeRefWavTests(MakeRunner):
         with contextlib.redirect_stderr(io.StringIO()) as err:
             with self.assertRaises(SystemExit):
                 cli.main(without_wav)
-        self.assertIn("--ref-wavには--wavか--tsが必要です", err.getvalue())
+        self.assertIn("--ref-wav requires --wav or --ts", err.getvalue())
 
 
 @unittest.skipIf(np is None, "numpyがありません")
