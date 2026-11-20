@@ -225,6 +225,9 @@ def ReadCommentsNiconico(f, fontsize):
                     size = fontsize * 0.64
                 elif mailstyle in NiconicoColorMap:
                     color = NiconicoColorMap[mailstyle]
+                elif mailstyle.lower() == '#dcf2f2':
+                    # 統合デバッグ用。ニコニコの色名にないので、ここだけ直接読む。
+                    color = 0xDCF2F2
             timeline = max(int(comment.getAttribute('vpos')), 0) * 0.01
             timestamp = int(comment.getAttribute('date'))
             no = int(comment.getAttribute('no'))
