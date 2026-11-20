@@ -166,13 +166,13 @@ python3 -m unittest discover -s tests -v
 
 ## exeをローカルで作る
 
-Python 3.12が要る。作業用のvenvを`build/`の下に作ってPyInstallerなどを入れ、単一のexeを`dist/`に作る(`dist/nicojk_ass(.exe)`)。できたexeで`--version`が版と合うことも確かめる。CIも同じスクリプトを呼ぶ。
+Python 3.10以上が要る。作業用のvenvを`build/`の下に作ってPyInstallerなどを入れ、単一のexeを`dist/`に作る(`dist/nicojk_ass(.exe)`)。できたexeで`--version`が版と合うことも確かめる。CIも同じスクリプトを呼ぶ。
 
 ```sh
 python3 packaging/build.py                      # Windowsでは python packaging\build.py
 python3 packaging/build.py --work /tmp/work --dist /tmp/dist
 ```
 
-- 依存の版は`packaging/requirements.txt`で固定している。
+- 依存は`packaging/requirements.txt`に書いてある。版は固定せず、そのときのPythonに入る最新版を使う。
 - zipへの梱包はCI(`.github/workflows/build-exe.yml`の「zipにする」)が行う。`src/nicojk_ass/_vendor/README.md`に記録したdanmaku2assをgit cloneし、`danmaku2ass.py`が`_vendor/`のものと一致することを確かめてから、`COPYING`を`LICENSE`・`README.md`と一緒にzipへ入れる。
 - Linuxで古いglibcのexeを作るには、`quay.io/pypa/manylinux_2_28_x86_64`などのコンテナの中で、`dnf install -y python3.12`したうえで`/usr/bin/python3.12 packaging/build.py`を実行する(`/opt/python`のPythonは共有ライブラリがなく、PyInstallerが使えない)。

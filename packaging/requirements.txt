@@ -1,4 +1,3 @@
-# exeを作るときに入れる依存(版を固定する)。Pythonは3.12。
-pyinstaller==6.22.3
-numpy==2.5.5
-certifi==2026.10.23
+pyinstaller
+numpy
+certifi
