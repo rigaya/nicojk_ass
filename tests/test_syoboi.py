@@ -141,7 +141,7 @@ class SyoboiTests(unittest.TestCase):
             def read(self):
                 return "応答".encode("utf-8")
 
-        def urlopen(request, timeout=None):
+        def urlopen(request, timeout=None, context=None):
             seen["agent"] = request.get_header("User-agent")
             seen["timeout"] = timeout
             seen["url"] = request.full_url

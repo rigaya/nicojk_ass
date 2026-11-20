@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nicojk_ass"
-version = "0.1.0"
+dynamic = ["version"]
 description = "ニコニコ実況コメントのASS生成ツール"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -12,6 +12,9 @@ license = { text = "MIT" }
 
 [project.scripts]
 nicojk_ass = "nicojk_ass.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "nicojk_ass.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]

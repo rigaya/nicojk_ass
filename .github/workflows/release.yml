@@ -1,0 +1,80 @@
+name: Release
+
+# 手動で起動する。版の番号を確かめ、3つのexeを作り、すべて成功したらタグを付けてdraft releaseを作る。
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - id: check
+        run: echo "version=$(python3 packaging/check_version.py)" >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install numpy
+      - run: python -m unittest discover -s tests
+
+  build:
+    needs: check
+    uses: ./.github/workflows/build-exe.yml
+
+  release:
+    needs: [check, test, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      # 待っている間に別のタグが付いていないか、もう一度確かめる
+      - name: 版を再確認する
+        run: test "$(python3 packaging/check_version.py)" = "$VERSION"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: exe-*
+          path: dist
+          merge-multiple: true
+      - name: タグを付ける
+        id: tag
+        run: |
+          git tag "$VERSION" "$GITHUB_SHA"
+          git push origin "refs/tags/$VERSION"
+      - name: draft releaseを作る
+        run: |
+          D2A_COMMIT=$(grep -oE '[0-9a-f]{40}' src/nicojk_ass/_vendor/README.md | head -n 1)
+          {
+            echo "nicojk_ass ${VERSION}"
+            echo
+            echo "- ニコニコ実況コメントのASS生成ツール。Windows x64、Linux x64、Linux arm64のexeです。"
+            echo "- \`-dir\`の付かないzipは単一のexe、\`-dir\`のzipはフォルダの形です。"
+            echo "- exeはGPL-3.0です(danmaku2assを含むため)。GPL-3の全文は各zipの\`danmaku2ass-license/COPYING\`にあります。"
+            echo "- ソース(MIT): ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/tree/${VERSION}"
+            echo "- 同梱のdanmaku2ass: https://github.com/m13253/danmaku2ass のコミット \`${D2A_COMMIT}\`"
+          } > notes.md
+          gh release create "$VERSION" --draft --verify-tag --title "$VERSION" --notes-file notes.md dist/*.zip
+      # 自分が付けたタグだけを消す(タグを付ける手順が失敗したときは、既存のタグを消さない)
+      - name: 失敗したらタグを消す
+        if: failure() && steps.tag.outcome == 'success'
+        run: git push origin ":refs/tags/$VERSION" || true

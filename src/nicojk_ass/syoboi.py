@@ -15,6 +15,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 from . import __version__
+from .net import ssl_context
 
 HTTP_TIMEOUT_SECONDS = 10
 REQUEST_INTERVAL_SECONDS = 10
@@ -37,7 +38,7 @@ def default_cache_dir():
 
 def _http_get(url):
     request = urllib.request.Request(url, headers={"User-Agent": f"nicojk_ass/{__version__}"})
-    with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+    with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS, context=ssl_context()) as response:
         return response.read().decode("utf-8")
 
 

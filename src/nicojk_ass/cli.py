@@ -91,7 +91,7 @@ def _output_arg(value):
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        prog="nicojk_ass", description="ニコニコ実況コメントのASS生成ツール")
+        prog="nicojk_ass", description=f"ニコニコ実況コメントのASS生成ツール (版 {__version__})")
     parser.add_argument("--version", action="version", version=f"nicojk_ass {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 

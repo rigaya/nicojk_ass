@@ -1,0 +1,85 @@
+name: Build exe
+
+# Windows x64、Linux x64、Linux arm64のexe(単一のexeとフォルダの形)を作り、zipにしてartifactに残す。
+# ci.ymlとrelease.ymlから呼ばれる。exeを作る手順は packaging/build.py にある。
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            runner: windows-latest
+          - name: linux-x64
+            runner: ubuntu-24.04
+            image: quay.io/pypa/manylinux_2_28_x86_64
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+            image: quay.io/pypa/manylinux_2_28_aarch64
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        if: matrix.name == 'windows-x64'
+        with:
+          python-version: "3.12"
+      - name: exeを作る(Windows)
+        if: matrix.name == 'windows-x64'
+        run: python packaging/build.py --dist exe
+
+      # 古いglibc(2.28)の環境で作る。/opt/pythonのPythonは共有ライブラリがなくPyInstallerが使えないので、RPMのpython3.12を使う。
+      - name: exeを作る(Linux、manylinux_2_28)
+        if: matrix.name != 'windows-x64'
+        run: |
+          mkdir -p exe
+          docker run --rm \
+            -e OWNER="$(id -u):$(id -g)" \
+            -v "$GITHUB_WORKSPACE:/src:ro" \
+            -v "$GITHUB_WORKSPACE/exe:/out" \
+            -w /src \
+            "${{ matrix.image }}" \
+            sh -c 'set -e; dnf install -y -q python3.12; /usr/bin/python3.12 packaging/build.py --work /tmp/work --dist /out; chown -R "$OWNER" /out'
+
+      # zipに、LICENSE、README.md、danmaku2assのCOPYING(GPL-3の全文)を入れる。
+      # COPYINGは、_vendor/README.mdに記録したURLとコミットのdanmaku2assをgit cloneして取る(リポジトリには置かない)。
+      - name: zipにする
+        env:
+          PLATFORM_NAME: ${{ matrix.name }}
+        run: |
+          set -e
+          # Windowsのpython3はMicrosoft Storeのスタブのことがあるので、setup-pythonのpythonを使う
+          if [ "$RUNNER_OS" = Windows ]; then PYTHON=python; else PYTHON=python3; fi
+          VERSION=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/nicojk_ass/__init__.py)
+          URL=$(grep -oE 'https://github\.com/[^ ]+danmaku2ass' src/nicojk_ass/_vendor/README.md | head -n 1)
+          COMMIT=$(grep -oE '[0-9a-f]{40}' src/nicojk_ass/_vendor/README.md | head -n 1)
+          git -c core.autocrlf=false clone -q "$URL" danmaku2ass
+          git -C danmaku2ass -c advice.detachedHead=false checkout -q "$COMMIT"
+          cmp danmaku2ass/danmaku2ass.py src/nicojk_ass/_vendor/danmaku2ass.py
+          mkdir -p dist
+          for MODE in onefile onedir; do
+            NAME="nicojk_ass-${VERSION}-${PLATFORM_NAME}"
+            if [ "$MODE" = onedir ]; then NAME="${NAME}-dir"; fi
+            cp -a "exe/${MODE}" "stage_${MODE}"
+            cp LICENSE README.md "stage_${MODE}/"
+            mkdir "stage_${MODE}/danmaku2ass-license"
+            cp danmaku2ass/COPYING "stage_${MODE}/danmaku2ass-license/COPYING"
+            # zipはどのランナーにもあるPythonのzipfileで作る(Linuxの実行の権限も残る)
+            (cd "stage_${MODE}" && "$PYTHON" -m zipfile -c "../dist/${NAME}.zip" ./*)
+          done
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exe-${{ matrix.name }}
+          path: dist/*.zip
+          if-no-files-found: error

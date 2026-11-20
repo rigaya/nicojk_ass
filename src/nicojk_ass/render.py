@@ -1,7 +1,10 @@
 """danmaku2assの呼び出しと、NicoConvAssに合わせるASSの後処理。"""
 
+import contextlib
+import io
 import os
 import re
+import runpy
 import subprocess
 import sys
 
@@ -38,14 +41,36 @@ def run_danmaku2ass(xml_path, output_path, width, height,
         xml_path,
     ]
     log(f"danmaku2ass: {' '.join(cmd)}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.stdout:
-        print(result.stdout, end="", file=sys.stderr)
-    if result.stderr:
-        print(result.stderr, end="", file=sys.stderr)
-    if result.returncode != 0:
-        log(f"danmaku2ass が失敗しました (exit={result.returncode})")
+    if getattr(sys, "frozen", False):
+        # exeではsys.executableがexe自身なので、同じプロセスの中で実行する
+        returncode, output = _run_in_process(cmd[1:])
+    else:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        returncode, output = result.returncode, result.stdout + result.stderr
+    if output:
+        print(output, end="", file=sys.stderr)
+    if returncode != 0:
+        log(f"danmaku2ass が失敗しました (exit={returncode})")
         raise NicoJKExit(EXIT_ERROR)
+
+
+def _run_in_process(argv):
+    """danmaku2ass.pyをこのプロセスの中で実行する。(終了コード, 標準出力と標準エラーの内容)を返す。"""
+    buffer = io.StringIO()
+    saved_argv = sys.argv
+    sys.argv = list(argv)
+    returncode = 0
+    try:
+        with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(buffer):
+            runpy.run_path(argv[0], run_name="__main__")
+    except SystemExit as error:
+        returncode = error.code if isinstance(error.code, int) else (0 if error.code is None else 1)
+    except Exception as error:
+        buffer.write(f"{type(error).__name__}: {error}\n")
+        returncode = 1
+    finally:
+        sys.argv = saved_argv
+    return returncode, buffer.getvalue()
 
 
 # ------------------------------------------------------------------ #

@@ -9,6 +9,7 @@ import xml.etree.ElementTree as ET
 from decimal import Decimal, InvalidOperation
 
 from . import __version__
+from .net import ssl_context
 
 DEFAULT_API_BASE = "https://jikkyo.tsukumijima.net"
 MAX_FETCH_SECONDS = 3 * 24 * 3600
@@ -104,7 +105,7 @@ def fetch_comments_xml(channel, starttime, endtime, api_base):
             req = urllib.request.Request(url, headers={
                 "User-Agent": f"nicojk_ass/{__version__}",
             })
-            with urllib.request.urlopen(req, timeout=60) as resp:
+            with urllib.request.urlopen(req, timeout=60, context=ssl_context()) as resp:
                 data = resp.read().decode("utf-8")
         except urllib.error.HTTPError as e:
             if e.code in (400, 404):

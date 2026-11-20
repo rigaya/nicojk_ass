@@ -4,7 +4,7 @@
 
 過去ログは [ニコニコ実況 過去ログ API](https://jikkyo.tsukumijima.net)(個人運営)から取得する。負荷をかけないよう、短い間隔で繰り返し呼ばないこと。
 
-この版(第3段)でできること:
+できること:
 
 - 局(ServiceIdまたはjk番号)と時刻の範囲を指定して、コメントを取得してASSにする
 - ローカルのコメントファイル(XML、NicoJKのjkl)をASSにする(取得元の時刻合わせを含む)
@@ -16,7 +16,29 @@
 - 音声照合だけを行う(`align`。開発用)
 - 1回の実行で複数の解像度のASSを出力する
 
-## 必要なもの
+## 入手と実行
+
+### exe(おすすめ)
+
+リリースのページから、環境に合うzipを取る。Pythonは要らない(numpyも同梱している)。
+
+| zip | 内容 |
+|---|---|
+| `nicojk_ass-<版>-windows-x64.zip` | Windows x64。単一のexe(起動時に一時フォルダへ展開するため、起動に0.3〜0.9秒かかる) |
+| `nicojk_ass-<版>-windows-x64-dir.zip` | Windows x64。フォルダの形(起動が速く、ウイルス対策ソフトに誤検知されにくい) |
+| `nicojk_ass-<版>-linux-x64.zip` / `-linux-x64-dir.zip` | Linux x64(glibc 2.28以上) |
+| `nicojk_ass-<版>-linux-arm64.zip` / `-linux-arm64-dir.zip` | Linux arm64(glibc 2.28以上) |
+
+zipを展開して実行する。`LICENSE`、`README.md`、`danmaku2ass-license/COPYING`(GPL-3の全文)も入っている。
+
+```sh
+./nicojk_ass --version          # 版を出す
+./nicojk_ass make --sid 211 --start 2026-11-19T21:00:00 --end 2026-11-19T21:30:00 --output 1920x1080=out.ass
+```
+
+exeはGPL-3.0で配布する(「ライセンス」を参照)。HTTPSの証明書は、exeに同梱のcertifiのものを使う。
+
+### ソースのまま
 
 Python 3.10以上。音声照合(`--ref-wav`、`--alt`、`--ref-ts`、`align`)にはnumpyが要る(`--alt`で録画がないときの方式Dはnumpy不要)。それ以外は標準ライブラリだけで動く。
 
@@ -76,7 +98,7 @@ python3 nicojk_ass.py make --comments-file comments.xml \
 
 - 録画が見つからない、しょぼいカレンダーやデコード、照合に失敗した、`--wav`や`--decoder`がない: 警告を出して対象の局のコメントだけにする(終了コード0)。
 - 対象が遅れネット・独自枠(対象の局のjk番号のコメントが別の番組のもの)で、基準を使えない: 実況を付けず、終了コード100。遅れネットで基準を使うときは、`merge`を指定しても`replace`にする。
-- 方式D(コメント照合)は第4段、`--ts`と`--decoder ffmpeg`は第6段で足す。
+- `--ts`と`--decoder ffmpeg`(外部からの入口)は、今後の版で足す予定。
 
 `--report`には、`"alt"`(`plan`と同じ内容)と`"decode"`(デコードの結果)が入る。
 
@@ -120,5 +142,29 @@ python3 -m unittest discover -s tests -v
 
 - このリポジトリのソース(`src/nicojk_ass/`のうち`_vendor/`以外、`nicojk_ass.py`、テストなど)はMIT License(`LICENSE`)。
 - `src/nicojk_ass/_vendor/danmaku2ass.py`は[danmaku2ass](https://github.com/m13253/danmaku2ass)のコミット`ced881747670c2eb1c0dbd292c2a567f444b056a`を、手を加えずに同梱したもの。ライセンスはGPL-3.0(ファイルの先頭の表記と https://www.gnu.org/licenses/gpl-3.0.html を参照)。
-- danmaku2assを含むため、配布するexe(今後の予定)はGPL-3.0になる。ソースはこのリポジトリで公開する。
+- danmaku2assを含むため、配布するexe(zip)はGPL-3.0になる。ソースはこのリポジトリで公開する。GPL-3の全文は、zipの`danmaku2ass-license/COPYING`にだけ入れている(このリポジトリのソースはMITなので、リポジトリには置かない)。
 - Amatsukazeからは別のプロセスとして呼ぶだけで、Amatsukazeのライセンスは変わらない。
+
+## 版の番号とリリース
+
+- 版の番号は`0.01`、`0.02`、…、`0.99`、`1.00`、…(整数部.小数2桁)。`src/nicojk_ass/__init__.py`の`__version__`だけに書く。`nicojk_ass --version`と`--help`に出る。`pyproject.toml`はここから読む(PEP 440では`0.01`が`0.1`に正規化される)。
+- gitのタグは版の番号そのもの(`0.01`。`v`を付けない)。
+- リリースの手順:
+    1. `__version__`を、既存の最大のタグより大きい値に上げてコミットし、pushする。
+    2. `python3 packaging/check_version.py`で、版の形、タグがまだないこと、既存の最大のタグより大きいことを確かめる(手動の起動のワークフローも最初に同じ確認をする)。
+    3. GitHubのActionsで「Release」を手動で起動する。Windows x64、Linux x64、Linux arm64のexeを作り、すべて成功したらタグを付けて、draft releaseを作る(zipを付ける)。
+    4. draft releaseの説明(exeはGPL-3、ソースの場所、danmaku2assのコミット)を確かめて公開する。
+- push・pull requestでは、テストとexeのビルドだけを行い、exeはartifactに残す。
+
+## exeをローカルで作る
+
+Python 3.12が要る。作業用のvenvを`build/`の下に作ってPyInstallerなどを入れ、単一のexeとフォルダの形を`dist/`に作る(`dist/onefile/`、`dist/onedir/nicojk_ass/`)。できたexeで`--version`が版と合うことも確かめる。CIも同じスクリプトを呼ぶ。
+
+```sh
+python3 packaging/build.py                      # Windowsでは python packaging\build.py
+python3 packaging/build.py --work /tmp/work --dist /tmp/dist
+```
+
+- 依存の版は`packaging/requirements.txt`で固定している。
+- zipへの梱包はCI(`.github/workflows/build-exe.yml`の「zipにする」)が行う。`src/nicojk_ass/_vendor/README.md`に記録したdanmaku2assをgit cloneし、`danmaku2ass.py`が`_vendor/`のものと一致することを確かめてから、`COPYING`を`LICENSE`・`README.md`と一緒にzipへ入れる。
+- Linuxで古いglibcのexeを作るには、`quay.io/pypa/manylinux_2_28_x86_64`などのコンテナの中で、`dnf install -y python3.12`したうえで`/usr/bin/python3.12 packaging/build.py`を実行する(`/opt/python`のPythonは共有ライブラリがなく、PyInstallerが使えない)。
