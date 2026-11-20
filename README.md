@@ -1,38 +1,38 @@
 # nicojk_ass
 
-ニコニコ実況の過去ログ(コメント)を取得し、ASS字幕にするツール。[Amatsukaze](https://github.com/rigaya/Amatsukaze)から呼び出して使う。単体でも使える。
+ニコニコ実況の過去ログ(コメント)を取得し、ASS字幕にするツールです。
 
-過去ログは [ニコニコ実況 過去ログ API](https://jikkyo.tsukumijima.net)から取得する。
+過去ログは [ニコニコ実況 過去ログ API](https://jikkyo.tsukumijima.net)から取得します。
 
 ## 機能
 
-- 局と時間を指定して、コメントを取得してASSにする
-- コメントファイル(XML、NicoJKのjkl)をASSにする(取得元の時刻合わせを含む)
+- 局と時間を指定して、コメントを取得してASSに変換
+- コメントファイル(XML、NicoJKのjkl)をASSに変換(取得元の時刻合わせを含む)
 - 別の局のコメントの統合・差し替え(`--mode merge|replace`)
 - 別の局のコメントの時刻合わせ方は下記に対応
   - 時刻の対応表(`--timemap`)
   - 音声の照合(WAVは`--wav`・`--ref-wav`、TSは`--ref-ts`・`--decoder`)
   - コメントの照合(`--ref-sid`など)
-- 別の時間の録画を、しょぼいカレンダーとフォルダから自動で探す(`--alt`、`plan`)
-- 録画(TS)を渡すだけで動かす。放送時刻と音声はTSから読む(`--ts`)
-- 複数の解像度のASSを一度に出す
-- 統合したコメントを過去ログと同じXMLで出す(`--comments-output`)
+- 別の時間の録画を、しょぼいカレンダーとフォルダから自動で検索(`--alt`、`plan`)
+- 録画(TS)を渡すだけで動かす。放送時刻と音声はTSから取得(`--ts`)
+- 複数の解像度のASSを一度に出力
+- 統合したコメントを過去ログと同じXMLで出力(`--comments-output`)
 
-基本の流れ:
+### 基本機能
 
 ![基本の流れ](docs/images/flow_basic.png)
 
-別の局のコメントを使う流れ:
+### 別の局のコメントを使う機能
 
 ![別の局のコメントを使う流れ](docs/images/flow_alt.png)
 
 ## 実行方法
 
-nicojk_assの実行ファイルを使うか、pythonスクリプトをそのまま実行することもできる。
+nicojk_assの実行ファイルを配布しているのでこれを直接実行します。また、pythonスクリプトをそのまま実行することもできます。
 
 ### nicojk_ass 実行ファイル
 
-リリースのページから、環境に合うものをダウンロードして展開する。
+リリースのページから、環境に合うものをダウンロード・展開して実行してください。
 
 | zip | 内容 |
 |---|---|
@@ -46,7 +46,9 @@ nicojk_assの実行ファイルを使うか、pythonスクリプトをそのま�
 
 ### nicojk_ass.py スクリプト実行の場合
 
-Python 3.10以上で、`nicojk_ass.py`を実行する。音声で照合する(`--ref-wav`、`--ref-ts`、`--alt`、`align`)ときだけnumpyが要る。
+`nicojk_ass.py`を実行します。python 3.10以上が必要です。
+
+音声で照合する(`--ref-wav`、`--ref-ts`、`--alt`、`align`)ときは追加でnumpyが必要です。
 
 ```sh
 pip install numpy
@@ -55,39 +57,34 @@ python3 nicojk_ass.py make --sid 211 --start 2026-11-19T21:00:00 --end 2026-11-1
 
 ### ffmpeg
 
-`--ts`と`--decoder ffmpeg`にはffmpegが要る(実行ファイルでもソースでも同じ)。PATHにあるものを使うか、`--decoder ffmpeg=PATH`で指定する。
+さらに、`--ts`と`--decoder ffmpeg`には追加でffmpegが必要です(実行ファイルでもスクリプト実行でも同じ)。`PATH`にあるものを使うか、`--decoder ffmpeg=PATH`で指定してください。
 
 ## 使い方
 
-```sh
-# 局のコメントをAPIから取得する
-python3 nicojk_ass.py make --sid 211 \
-    --start 2026-11-19T21:00:00 --end 2026-11-19T21:30:00 \
-    --output 1920x1080=out1080.ass --output 1280x720=out720.ass
+時刻はUNIX秒(小数可)、ISO 8601(タイムゾーンを省くとJST)、14桁のJST(`YYYYMMDDhhmmss`)のどれでもOKです。
 
-# コメントファイルを使う(番組開始の時刻を合わせる)
-python3 nicojk_ass.py make --comments-file comments.xml \
-    --start 20261119210000 --end 20261119213000 --comments-start 20261119210000 \
-    --output 1920x1080=out.ass
+- 例1: 局のコメントをAPIから取得
 
-# 録画を渡す。時刻はTSの見出しから求め、同じフォルダの先行放送も探す(ffmpegが要る)
-python3 nicojk_ass.py make --ts 対象.ts --alt merge --search-dir 録画のフォルダ \
-    --output 1920x1080=out.ass
+  `nicojk_ass make --sid 211 --start 2026-11-19T21:00:00 --end 2026-11-19T21:30:00 --output 1920x1080=out1080.ass --output 1280x720=out720.ass`
 
-# 統合だけ行い、過去ログと同じXMLで書く(他のアプリがdate/date_usecで読む)
-python3 nicojk_ass.py make --ts 対象.ts --alt merge --search-dir 録画のフォルダ \
-    --comments-output merged.xml
-```
+- 例: コメントファイルを使用(番組開始の時刻を合わせる)
 
-時刻はUNIX秒(小数可)、ISO 8601(タイムゾーンを省くとJST)、14桁のJST(`YYYYMMDDhhmmss`)のどれでも可。
+  `nicojk_ass make --comments-file comments.xml --start 20261119210000 --end 20261119213000 --comments-start 20261119210000 --output 1920x1080=out.ass`
+
+- 例: 時刻はTSの見出しから求め、同じフォルダの先行放送も探す例 (要ffmpeg)
+
+  `nicojk_ass make --ts 対象.ts --alt merge --search-dir <録画フォルダ> --output 1920x1080=out.ass`
+
+- 例: 統合だけ行い、過去ログと同じXMLで出力
+
+  `nicojk_ass make --ts 対象.ts --alt merge --search-dir <録画フォルダ> --comments-output merged.xml`
+
 
 ## `make`モード
 
 ### 基本オプション
 
-対象の録画の時刻と、コメントの取得元を、それぞれ次のどちらかで指定する。
-
-終了コード: 0は成功(コメントが0件でも出力を書く)、100は付けるコメントがない(局にjk番号がない、APIが400/404を返した)、1はエラー。
+対象の録画の時刻と、コメントの取得元を、それぞれ次のどちらかで指定します。
 
 **対象の録画の時刻**(表の2つのどちらか一方を指定)
 
@@ -113,25 +110,27 @@ python3 nicojk_ass.py make --ts 対象.ts --alt merge --search-dir 録画のフ�
 | `--comments-offset S` | 取得範囲を、ここで指定した秒数だけ前へずらす |
 | `--api-url URL` | (APIのみ)過去ログAPIのベースURL |
 
-ASSの時刻0は取得範囲の始まり。取得範囲の始まりは`録画の先頭 + (--comments-start − --program-start) − --comments-offset`、長さは録画の長さ。
+ASSの時刻0は取得範囲の始まりです。取得範囲の始まりは`録画の先頭 + (--comments-start − --program-start) − --comments-offset`、長さは録画の長さになります。
 
 ### 出力
 
 | オプション | 内容 | デフォルト |
 |---|---|---|
 | `--output WxH=PATH` | 解像度ごとのASSの出力先。繰り返し指定できる。取得は1回だけ | なし |
-| `--comments-output F` | 統合などの結果を、ニコニコ実況の過去ログと同じXML(`<packet>`の中の`<chat>`)で書く。時刻は対象の録画の先頭を0にしたときの絶対時刻で、`date`と`date_usec`に入る。`vpos`は実況スレッド開始(4:00 JST)からのセンチ秒。`--output`を省くとASSは作らない。両方指定するとXMLとASSを両方書く | なし |
+| `--comments-output F` | 統合などの結果を、ニコニコ実況の過去ログと同じXMLで出力 | なし |
 | `--font NAME` | フォント名 | `MS PGothic` |
 | `--fontsize N` | フォントサイズ(ピクセル、正の整数) | 解像度の高さから決める(`高さ×37÷720`、最小16。1080pで55、720pで37) |
 | `--display-seconds S` | コメントを表示する秒数(スクロールと上下の固定の両方) | 6.0 |
 | `--opacity A` | 不透明度(0.0〜1.0。1.0で不透明) | 1.0 |
 | `--report F` | 取得元、範囲、件数、終了の理由などをJSONで書く(`"schema": 1`) | 書かない |
 
-`--output`と`--comments-output`のどちらかが要る。
+`--output`と`--comments-output`のどちらかが必要です。
 
 ### 別の局のコメントを使う
 
-同じ番組を放送した別の局(先行放送・同時刻の放送)のコメントを、時刻を合わせて使う。手元にあるものに応じて、次のどれか1つを指定する。
+同じ番組を放送した別の局(先行放送・同時刻の放送)のコメントを、時刻を合わせて統合したり差し替えたりすることができます。
+
+手元にあるものに応じて、次のどれか1つを指定します。
 
 | 手元にあるもの | 指定するオプション | 時刻の合わせ方 |
 |---|---|---|
@@ -141,22 +140,24 @@ ASSの時刻0は取得範囲の始まり。取得範囲の始まりは`録画の
 | 別の局の放送時刻だけ | `--ref-sid N` `--ref-start T` `--ref-end T` | コメントで照合 |
 | 時刻の対応表 | `--timemap F` `--ref-sid N` `--ref-start T` `--ref-end T` | 対応表のとおり |
 
-- 音声で照合するには、対象の音声も要る。`--ts`なら対象のTSからデコードして作る。`--start`・`--end`で指定したときは`--wav`で渡す。
-- 時刻を合わせられなかったときは、警告を出して対象の局のコメントだけを使う(終了コード0)。
-- 別の局のコメントを使うときは、`--comments-file`・`--comments-start`・`--comments-offset`は指定できない。
+- 時刻を合わせられなかったときは、警告を出して対象の局のコメントだけを使用します(終了コード0)。
+- 別の局のコメントを使うときは、`--comments-file`・`--comments-start`・`--comments-offset`は指定できません。
 
-```sh
-# 録画のフォルダから自動で探す
-python3 nicojk_ass.py make --ts 対象.ts --alt merge --search-dir 録画のフォルダ --output 1920x1080=out.ass
+#### 別の局のコメントを使う際のコマンド例
 
-# 別の局の録画を指定する
-python3 nicojk_ass.py make --ts 対象.ts --ref-ts 別の局.ts --output 1920x1080=out.ass
+- 録画のフォルダから自動で探す
 
-# 別の局の放送時刻だけを指定する
-python3 nicojk_ass.py make --sid 211 --start 2026-11-19T21:00:00 --end 2026-11-19T21:30:00 \
-    --ref-sid 1064 --ref-start 2026-11-12T21:00:00 --ref-end 2026-11-12T21:30:00 \
-    --output 1920x1080=out.ass
-```
+  `nicojk_ass make --ts 対象.ts --alt merge --search-dir <録画のフォルダ> --output 1920x1080=out.ass`
+
+- 別の局の録画を指定する
+
+  `nicojk_ass make --ts 対象.ts --ref-ts 別の局.ts --output 1920x1080=out.ass`
+
+- 別の局の放送時刻だけを指定する
+
+  `nicojk_ass make --sid 211 --start 2026-11-19T21:00:00 --end 2026-11-19T21:30:00 --ref-sid 1064 --ref-start 2026-11-12T21:00:00 --ref-end 2026-11-12T21:30:00 --output 1920x1080=out.ass`
+
+#### 別の局のコメントを使う際の関連オプション
 
 - 共通のオプション
 
@@ -217,12 +218,22 @@ python3 nicojk_ass.py make --sid 211 --start 2026-11-19T21:00:00 --end 2026-11-1
   |---|---|---|
   | `--timemap F` | 別の局の時刻から対象の時刻への対応表。JSONで、`[別の局の開始, 別の局の終了, 対象の開始, 対象の終了]`を並べる | なし |
 
+### 終了コード
+
+
+  | 値 | 内容 |
+  |---|---|
+  | 0 | 成功(コメントが0件でも出力を書く) |
+  | 100 | 付けるコメントがない(局にjk番号がない、APIが400/404を返した) |
+  | 1 | エラー |
+
+
 ## `plan`モード
 
 `--alt`の前半(放送の特定と録画の探索)だけを行い、結果をJSONで出す。デコードも照合もしない。`--alt`がどの録画を選ぶかを、前もって確かめるのに使う。
 
 ```sh
-python3 nicojk_ass.py plan --sid 211 --start 2026-10-09T00:00:00 --search-dir Z:\rec --report plan.json
+nicojk_ass plan --sid 211 --start 2026-10-09T00:00:00 --search-dir <録画のフォルダ> --report plan.json
 ```
 
 - オプション
@@ -249,7 +260,9 @@ python3 nicojk_ass.py plan --sid 211 --start 2026-10-09T00:00:00 --search-dir Z:
   | `error` | 失敗の理由。なければ`null` |
   | `log` | 処理の記録 |
 
-- 終了コード: 0(録画が見つからなくても0)、1は結果を書けなかったとき。
+- 終了コード
+  
+  0(録画が見つからなくても0)、1は結果を書けなかったとき。
 
 ## `align`(開発用)モード
 
