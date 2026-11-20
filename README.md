@@ -2,47 +2,48 @@
 
 ニコニコ実況の過去ログ(コメント)を取得し、ASS字幕にするツール。[Amatsukaze](https://github.com/rigaya/Amatsukaze)から呼び出して使う。単体でも使える。
 
-過去ログは [ニコニコ実況 過去ログ API](https://jikkyo.tsukumijima.net)(個人運営)から取得する。負荷をかけないよう、短い間隔で繰り返し呼ばないこと。
+過去ログは [ニコニコ実況 過去ログ API](https://jikkyo.tsukumijima.net)から取得する。
 
-できること:
+## 機能
 
 - 局(ServiceIdまたはjk番号)と時刻の範囲を指定して、コメントを取得してASSにする
 - ローカルのコメントファイル(XML、NicoJKのjkl)をASSにする(取得元の時刻合わせを含む)
 - 別の局(基準)のコメントを、時刻の対応表(`--timemap`)で対象の時刻へ写して使う、またはその局のコメントと統合する
-- 対象と基準の音声(WAV)を照合して対応表を作り、基準のコメントを写す(`--wav`、`--ref-wav`)
-- 音声がなくても、両局のコメントの本文の一致で対応表を作って写す(方式D。`--ref-sid`・`--ref-start`・`--ref-end`)
+- 対象と基準の音声を照合して対応表を作り、基準のコメントを写す(`--wav`、`--ref-wav`)
+- 音声がなくても、両局のコメントの本文の一致で対応表を作って写す(`--ref-sid`・`--ref-start`・`--ref-end`)
 - 先行放送・同時刻の放送の録画を、しょぼいカレンダーとフォルダから自動で探して基準にする(`--alt`)。探す処理だけを行う`plan`もある
 - 基準の録画(TS)を、外部のデコーダー(AmatsukazeCLIまたはffmpeg)で音声にして照合する(`--ref-ts`、`--decoder`)
 - 対象の録画(TS)だけを渡して、時刻と音声を自分で求める(`--ts`。音声はffmpeg)
 - 音声照合だけを行う(`align`。開発用)
 - 1回の実行で複数の解像度のASSを出力する
+- 統合した結果を、ニコニコ実況の過去ログと同じXMLで書き出す(`--comments-output`。ASSは省ける)
 
 ## 入手と実行
 
-### exe(おすすめ)
+### 実行ファイル
 
-リリースのページから、環境に合うzipを取る。Pythonは要らない(numpyも同梱している)。
+リリースのページから、環境に合うものをダウンロードして展開する。
 
 | zip | 内容 |
 |---|---|
-| `nicojk_ass-<版>-windows-x64.zip` | Windows x64 |
-| `nicojk_ass-<版>-linux-x64.zip` | Linux x64(glibc 2.28以上) |
-| `nicojk_ass-<版>-linux-arm64.zip` | Linux arm64(glibc 2.28以上) |
-
-exeは単一のファイルで、起動のたびに一時フォルダへ展開するため、起動に0.3〜0.9秒かかる。
-
-zipを展開して実行する。`LICENSE`、`README.md`、`danmaku2ass-license/COPYING`(GPL-3の全文)も入っている。
+| `nicojk_ass-<version>-windows-x64.zip` | Windows x64 |
+| `nicojk_ass-<version>-linux-x64.zip` | Linux x64(glibc 2.28以上) |
+| `nicojk_ass-<version>-linux-arm64.zip` | Linux arm64(glibc 2.28以上) |
 
 ```sh
-./nicojk_ass --version          # 版を出す
 ./nicojk_ass make --sid 211 --start 2026-11-19T21:00:00 --end 2026-11-19T21:30:00 --output 1920x1080=out.ass
 ```
 
-exeはGPL-3.0で配布する(「ライセンス」を参照)。HTTPSの証明書は、exeに同梱のcertifiのものを使う。
-
 ### ソースのまま
 
-Python 3.10以上。音声照合(`--ref-wav`、`--alt`、`--ref-ts`、`align`)にはnumpyが要る(`--alt`で録画がないときの方式Dはnumpy不要)。`--ts`と`--decoder ffmpeg`にはffmpegの実行ファイルが要る。それ以外は標準ライブラリだけで動く。
+Python 3.10以上が必要。
+
+- 追加の依存モジュール
+
+  - 音声照合(`--ref-wav`、`--alt`、`--ref-ts`、`align`)
+    - numpy 
+  - `--ts`と`--decoder ffmpeg`
+    - ffmpeg
 
 ## 使い方
 
@@ -60,9 +61,13 @@ python3 nicojk_ass.py make --comments-file comments.xml \
 # 録画を渡す。時刻はTSの見出しから求め、同じフォルダの先行放送も探す(ffmpegが要る)
 python3 nicojk_ass.py make --ts 対象.ts --alt merge --search-dir 録画のフォルダ \
     --output 1920x1080=out.ass
+
+# 統合だけ行い、過去ログと同じXMLで書く(他のアプリがdate/date_usecで読む)
+python3 nicojk_ass.py make --ts 対象.ts --alt merge --search-dir 録画のフォルダ \
+    --comments-output merged.xml
 ```
 
-時刻はUNIX秒(小数可)、ISO 8601(タイムゾーンを省くとJST)、14桁のJST(`YYYYMMDDhhmmss`)のどれでも指定できる。
+時刻はUNIX秒(小数可)、ISO 8601(タイムゾーンを省くとJST)、14桁のJST(`YYYYMMDDhhmmss`)のどれでも可。
 
 ### `make`のオプション
 
@@ -115,14 +120,13 @@ python3 nicojk_ass.py make --ts 対象.ts --alt merge --search-dir 録画のフ�
 | オプション | 内容 |
 |---|---|
 | `--output WxH=PATH` | 解像度ごとのASSの出力先。繰り返し指定できる。取得は1回だけ |
+| `--comments-output F` | 統合などの結果を、ニコニコ実況の過去ログと同じXML(`<packet>`の中の`<chat>`)で書く。時刻は対象の録画の先頭を0にしたときの絶対時刻で、`date`と`date_usec`に入る。`vpos`は実況スレッド開始(4:00 JST)からのセンチ秒。`--output`を省くとASSは作らない。両方指定するとXMLとASSを両方書く |
 | `--font` `--fontsize` `--display-seconds` `--opacity` | フォント、サイズ(省略時は解像度から決まる)、スクロールコメントの表示秒数、不透明度 |
 | `--report F` | 取得元、範囲、件数、終了の理由などをJSONで書く(`"schema": 1`) |
 | `--mark-reference-color COLOR` | 統合で基準の局のコメントにこの色を足す(調査用) |
 | `--api-url URL` | 過去ログAPIのベースURL |
 
-終了コード: 0は成功(コメントが0件でもASSを書く)、100は付けるコメントがない(局にjk番号がない、APIが400/404を返した)、1はエラー。
-
-`nicojk_ass --version`で版を表示する。
+終了コード: 0は成功(コメントが0件でも出力を書く)、100は付けるコメントがない(局にjk番号がない、APIが400/404を返した)、1はエラー。
 
 ### `plan`
 
@@ -140,39 +144,13 @@ python3 nicojk_ass.py align --wav 対象.wav --ref-wav 基準.wav [--report resu
 
 音声照合だけを行い、区間・ずれ・相関比・対応表をJSONに書く(`--report`を省くと標準出力)。拡張子が`.f32`のファイルは、8kHzモノラルのfloat32の生のPCMとして読む。終了コードは、成功0、照合の失敗1、その他のエラー2。
 
-## テスト
+## 開発
 
-```sh
-python3 -m unittest discover -s tests -v
-```
+→ [開発メモ](dev_memo.md)
 
 ## ライセンス
 
-- このリポジトリのソース(`src/nicojk_ass/`のうち`_vendor/`以外、`nicojk_ass.py`、テストなど)はMIT License(`LICENSE`)。
-- `src/nicojk_ass/_vendor/danmaku2ass.py`は[danmaku2ass](https://github.com/m13253/danmaku2ass)のコミット`ced881747670c2eb1c0dbd292c2a567f444b056a`を、手を加えずに同梱したもの。ライセンスはGPL-3.0(ファイルの先頭の表記と https://www.gnu.org/licenses/gpl-3.0.html を参照)。
-- danmaku2assを含むため、配布するexe(zip)はGPL-3.0になる。ソースはこのリポジトリで公開する。GPL-3の全文は、zipの`danmaku2ass-license/COPYING`にだけ入れている(このリポジトリのソースはMITなので、リポジトリには置かない)。
-- Amatsukazeからは別のプロセスとして呼ぶだけで、Amatsukazeのライセンスは変わらない。
+- このリポジトリのソース(`_vendor/`以外)はMIT License(`LICENSE`)。
+- `src/nicojk_ass/_vendor/danmaku2ass.py`は[danmaku2ass](https://github.com/m13253/danmaku2ass)のもので、ライセンスはGPL-3.0。
+- danmaku2assを含むため、配布するexe(zip)はGPL-3.0になる。
 
-## 版の番号とリリース
-
-- 版の番号は`0.01`、`0.02`、…、`0.99`、`1.00`、…(整数部.小数2桁)。`src/nicojk_ass/__init__.py`の`__version__`だけに書く。`nicojk_ass --version`と`--help`に出る。`pyproject.toml`はここから読む(PEP 440では`0.01`が`0.1`に正規化される)。
-- gitのタグは版の番号そのもの(`0.01`。`v`を付けない)。
-- リリースの手順:
-    1. `__version__`を、既存の最大のタグより大きい値に上げてコミットし、pushする。
-    2. `python3 packaging/check_version.py`で、版の形、タグがまだないこと、既存の最大のタグより大きいことを確かめる(手動の起動のワークフローも最初に同じ確認をする)。
-    3. GitHubのActionsで「Release」を手動で起動する。Windows x64、Linux x64、Linux arm64のexeを作り、すべて成功したらタグを付けて、draft releaseを作る(zipを付ける)。
-    4. draft releaseの説明(exeはGPL-3、ソースの場所、danmaku2assのコミット)を確かめて公開する。
-- push・pull requestでは、テストとexeのビルドだけを行い、exeはartifactに残す。
-
-## exeをローカルで作る
-
-Python 3.10以上が要る。作業用のvenvを`build/`の下に作ってPyInstallerなどを入れ、単一のexeを`dist/`に作る(`dist/nicojk_ass(.exe)`)。できたexeで`--version`が版と合うことも確かめる。CIも同じスクリプトを呼ぶ。
-
-```sh
-python3 packaging/build.py                      # Windowsでは python packaging\build.py
-python3 packaging/build.py --work /tmp/work --dist /tmp/dist
-```
-
-- 依存は`packaging/requirements.txt`に書いてある。版は固定せず、そのときのPythonに入る最新版を使う。
-- zipへの梱包はCI(`.github/workflows/build-exe.yml`の「zipにする」)が行う。`src/nicojk_ass/_vendor/README.md`に記録したdanmaku2assをgit cloneし、`danmaku2ass.py`が`_vendor/`のものと一致することを確かめてから、`COPYING`を`LICENSE`・`README.md`と一緒にzipへ入れる。
-- Linuxで古いglibcのexeを作るには、`quay.io/pypa/manylinux_2_28_x86_64`などのコンテナの中で、`dnf install -y python3.12`したうえで`/usr/bin/python3.12 packaging/build.py`を実行する(`/opt/python`のPythonは共有ライブラリがなく、PyInstallerが使えない)。
