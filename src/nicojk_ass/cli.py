@@ -635,7 +635,7 @@ def _make_timemap(args, report, timemap, source="timemap", reference_xml=None, t
         try:
             xml_str = fetch_api_comments(f"jk{ref_jk}", ref_start, ref_end, args.api_url)
         except (NicoJKExit, ET.ParseError, ValueError) as error:
-            # 基準のコメントを取れないときは、ジョブを失敗させずに対象の局のコメントへ戻る(設計書4.2)。
+            # 基準のコメントを取れないときは、ジョブを失敗させずに対象の局のコメントへ戻る。
             log(f"警告: 基準の局のコメントを取得できないため基準を使いません: {error}")
             return None
     report["source"] = source

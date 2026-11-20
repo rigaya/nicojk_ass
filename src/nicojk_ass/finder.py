@@ -1,5 +1,5 @@
 """先行放送・同時刻の放送の特定と、その録画を探す処理(Amatsukazeのサーバーにあった
-NicoJKReferenceFinderの移植)。結果は設計書4.3のplanのJSONの形の辞書で返す。"""
+NicoJKReferenceFinderの移植)。結果はplanのJSONの形の辞書で返す。"""
 
 import hashlib
 import json

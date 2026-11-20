@@ -1,6 +1,5 @@
 """コメント本文の一致で、2局の実況コメントの時刻ずれを推定する(方式D)。
 
-設計: doc/nicojk_alt_source_comment_align_design.md の3章。
 tools/nicojk_comment_align_eval/estimator.pyから移したもの。推定の中身は評価で決めた数字を
 再現するため変えない。標準ライブラリだけで動く。
 
@@ -13,8 +12,8 @@ import re
 import unicodedata
 import xml.etree.ElementTree as ET
 
-# 3.7の初期値に、第0回の評価で決めた norm / fill / boundary と、第1回で決めた gap_ties / edge / min_* / extend_ratio を反映したもの。
-# 初版(設計書3章)の条件は --set norm=l2 --set fill=interpolate --set boundary=midpoint --set same_delta_seconds=-1
+# 初期値に、評価で決めた norm / fill / boundary と、gap_ties / edge / min_* / extend_ratio を反映したもの。
+# 初版の条件は --set norm=l2 --set fill=interpolate --set boundary=midpoint --set same_delta_seconds=-1
 # --set gap_ties=first --set edge=window --set min_segment_ratio=0 --set min_support=0 --set extend_ratio=0。
 DEFAULT_PARAMS = {
     "search_seconds": 300,      # 探索の中心の前後に探す範囲
@@ -63,7 +62,7 @@ DEFAULT_PARAMS = {
     # 対象(録画の範囲)と基準(取得した範囲)のコメントの少ないほうがこれより少なければ、推定しない(第1回で決めた)。
     # 20〜29件の層では写したコメントの35%が誤り、30件以上の層では誤りが2%前後以下だった。
     "min_comments": 30,
-    # 以下は、対象のCM解析の結果(本編の区間)を使うとき(find_segments_cm、設計書3.8)だけの条件。
+    # 以下は、対象のCM解析の結果(本編の区間)を使うとき(find_segments_cm)だけの条件。
     # 本文の一致がcm_span_support件以上ある本編の区間は、山の比がcm_span_ratio以上なら信頼する
     # (長い区間をまとめて推定すると2番目の山が育ち、一致が多くても山の比がmin_ratioを少し割ることがある)。
     "cm_span_ratio": 2.0,
@@ -79,7 +78,7 @@ DEFAULT_PARAMS = {
     "cm_edge_seconds": 45,
     "cm_tail_seconds": 10,
     "cm_edge_change_seconds": 0,
-    # 山の位置の取り直し(refine_smooth_seconds)。窓ごとの推定(3.6)では悪化するが、本編の区間ごとの推定では
+    # 山の位置の取り直し(refine_smooth_seconds)。窓ごとの推定では悪化するが、本編の区間ごとの推定では
     # 10秒以内の誤が減った(5〜7秒で同じ程度、4秒以下と8秒以上で悪化)。
     "cm_refine_smooth_seconds": 5,
 }
@@ -90,7 +89,7 @@ _REPEAT = re.compile(r"(.)\1+")
 
 
 def normalize(text):
-    """3.2の正規化。NFKC、小文字、カタカナ→ひらがな、記号と空白の除去、同じ文字の連続を1文字に。"""
+    """本文の正規化。NFKC、小文字、カタカナ→ひらがな、記号と空白の除去、同じ文字の連続を1文字に。"""
     text = unicodedata.normalize("NFKC", text).casefold().translate(_KATA_TO_HIRA)
     # \wは「_」を含むので、記号として除く。
     text = _NON_WORD.sub("", text).replace("_", "")
@@ -104,7 +103,7 @@ def grams(text, sizes):
 
 
 def comment_time(chat):
-    """コメントの絶対時刻。vposは端末が決めた値で投稿者ごとにずれるので使わない(3.1)。"""
+    """コメントの絶対時刻。vposは端末が決めた値で投稿者ごとにずれるので使わない。"""
     return int(chat.get("date")) + int(chat.get("date_usec", "0")) / 1e6
 
 
@@ -178,7 +177,7 @@ class ReferenceIndex:
 
 
 def vote(target, index, center, params):
-    """3.4の投票。時刻差(基準−対象−center)を箱に分け、共有する特徴の重みの積を足す。"""
+    """投票。時刻差(基準−対象−center)を箱に分け、共有する特徴の重みの積を足す。"""
     search, width = params["search_seconds"], params["bin_seconds"]
     size = int(round(2 * search / width)) + 1
     votes = [0.0] * size
@@ -357,7 +356,7 @@ def refine_boundary(target, times, index, low, high, before, after, params):
 
 
 def find_segments(target, index, center, target_start, target_duration, params):
-    """3.6の区間の決め方。区間を知らない状態で、対象の録画の時刻(先頭からの秒)で区間とずれを返す。
+    """区間の決め方。区間を知らない状態で、対象の録画の時刻(先頭からの秒)で区間とずれを返す。
 
     返り値: (segments, windows)
       segments: [{"start", "end", "delta", "ratio", "comments", "windows"}] 対象の録画の時刻順
@@ -458,7 +457,7 @@ def find_segments(target, index, center, target_start, target_duration, params):
     merged = extended
 
     # 5. 推定し直したずれがほぼ同じ隣どうしは、CMの長さの違いではなく推定のぶれなので、1つにまとめて推定し直す。
-    #    局ごとのCMの長さの差は5秒単位のことが多い(設計書6章)ので、それより小さい差はまとめる。
+    #    局ごとのCMの長さの差は5秒単位のことが多いので、それより小さい差はまとめる。
     i = 0
     while i + 1 < len(segments):
         if abs(segments[i]["delta"] - segments[i + 1]["delta"]) > params["same_delta_seconds"]:
@@ -518,12 +517,12 @@ def find_segments(target, index, center, target_start, target_duration, params):
     return segments, windows
 
 
-# find_segments_cmの中で使う3.6の推定(評価の道具がfind_segmentsを差し替えても、こちらは変わらない)
+# find_segments_cmの中で使う窓ごとの推定(評価の道具がfind_segmentsを差し替えても、こちらは変わらない)
 _window_segments = find_segments
 
 
 def find_segments_cm(target, index, center, target_start, target_duration, spans, params):
-    """3.8の区間の決め方。対象のCM解析の結果の本編の区間spans([(開始, 終了)]、録画の先頭からの秒)ごとにずれを推定する。
+    """本編の区間ごとの決め方。対象のCM解析の結果の本編の区間spans([(開始, 終了)]、録画の先頭からの秒)ごとにずれを推定する。
 
     返り値はfind_segmentsと同じ形(windowsは空)。区間の範囲は推定せず、本編の区間(と、その端からCM側へ延ばした範囲)を写す。
     """
@@ -617,7 +616,7 @@ def find_segments_cm(target, index, center, target_start, target_duration, spans
         if chosen is not None:
             row.update(delta=chosen, ok=True, filled=True, support=best)
 
-    # 6. それでも推定できなかった区間は、区間の中だけで3.6の推定(窓→区間)を行い、見つかった範囲だけ写す
+    # 6. それでも推定できなかった区間は、区間の中だけで窓ごとの推定を行い、見つかった範囲だけ写す
     #    (基準の局にだけCMが入り、本編の区間の途中でずれが変わる場合など)。
     output = [row for row in rows if row["ok"]]
     for row in rows:

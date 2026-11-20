@@ -1,4 +1,4 @@
-"""デコーダーの呼び出し(設計書4.5)。TSの主音声をWAVにする。
+"""デコーダーの呼び出し。TSの主音声をWAVにする。
 
 amatsukaze=はAmatsukazeCLIの--mode nicojk_wav。ffmpegは外部向けで、主音声を8kHzのモノラルにし、
 映像の先頭とのずれだけWAVの先頭を切るか無音を足す。ドロップはaresample=async=1が無音で埋める。
