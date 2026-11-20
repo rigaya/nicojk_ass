@@ -59,7 +59,7 @@ jobs:
           set -e
           # Windowsのpython3はMicrosoft Storeのスタブのことがあるので、setup-pythonのpythonを使う
           if [ "$RUNNER_OS" = Windows ]; then PYTHON=python; else PYTHON=python3; fi
-          VERSION=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/nicojk_ass/__init__.py)
+          VERSION=$(sed -n 's/^__version__ = "\(.*\)"\r\?$/\1/p' src/nicojk_ass/__init__.py)
           URL=$(grep -oE 'https://github\.com/[^ ]+danmaku2ass' src/nicojk_ass/_vendor/README.md | head -n 1)
           COMMIT=$(grep -oE '[0-9a-f]{40}' src/nicojk_ass/_vendor/README.md | head -n 1)
           git -c core.autocrlf=false clone -q "$URL" danmaku2ass
