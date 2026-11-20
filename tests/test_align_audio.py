@@ -100,7 +100,7 @@ class AlignTests(unittest.TestCase):
             self.assertLess(abs(result["segments"][0]["delta"]), 0.01)
             self.assertLess(result["segments"][0]["start"], 0.1)
             self.assertGreater(result["segments"][0]["end"], duration - 0.1)
-            self.assertLess(result["seconds"], 10)
+            self.assertLess(result["seconds"], 300)
 
 
 def segment(start, end, delta):

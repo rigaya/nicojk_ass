@@ -73,7 +73,7 @@ class FindTests(FinderTestCase):
             with self.subTest(directory=directory):
                 self.setUp()
                 f = self.f
-                reference = f.add_recording(directory + "/ゾンビさがしてます.ts", 1064, EARLIER)
+                reference = f.add_recording(os.path.join(directory, "ゾンビさがしてます.ts"), 1064, EARLIER)
                 self.assertEqual(f.find(), reference)
                 self.assertEqual(f.reads, [reference])
 
@@ -87,7 +87,7 @@ class FindTests(FinderTestCase):
 
     def test_ほかのサブフォルダと入力自身は読まない(self):
         f = self.f
-        f.add_recording("other/ゾンビさがしてます.ts", 1064, EARLIER)
+        f.add_recording(os.path.join("other", "ゾンビさがしてます.ts"), 1064, EARLIER)
         self.assertIsNone(f.find())
         self.assertEqual(f.reads, [])
 

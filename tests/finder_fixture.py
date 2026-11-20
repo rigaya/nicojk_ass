@@ -135,7 +135,8 @@ class Fixture:
         self.title = title_response(8028, title, short_title)
 
     def add_recording(self, name, sid, start):
-        path = os.path.join(self.root, name)
+        # nameの区切りが/でも、探索が返すOSのパスと同じキーにする
+        path = os.path.normpath(os.path.join(self.root, name))
         os.makedirs(os.path.dirname(path), exist_ok=True)
         Path(path).write_text("録画", encoding="utf-8")
         self.recordings[path] = make_ts(sid, start)
