@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import struct
 import sys
 import unittest
 import wave
@@ -162,20 +163,103 @@ class WavTests(TempDirTestCase):
             target.writeframes(pcm.tobytes())
         np.testing.assert_allclose(wav.read_wav(path), [2000 / 32768, -1000 / 32768])
 
-    def test_形式が違うWAVはエラー(self):
-        write_wav(self.directory / "rate.wav", noise(1, 1), rate=16000)
-        with self.assertRaises(ValueError):
-            wav.read_wav(self.directory / "rate.wav")
-        with wave.open(str(self.directory / "bit8.wav"), "wb") as target:
+    def test_8bitは128を0にする(self):
+        path = self.directory / "bit8.wav"
+        with wave.open(str(path), "wb") as target:
             target.setnchannels(1)
             target.setsampwidth(1)
             target.setframerate(RATE)
-            target.writeframes(b"\x80" * 100)
-        with self.assertRaises(ValueError):
-            wav.read_wav(self.directory / "bit8.wav")
+            target.writeframes(bytes((192, 96, 128)))
+        np.testing.assert_allclose(wav.read_wav(path), [0.5, -0.25, 0])
+
+    def test_24bitと32bitはフルスケールが1(self):
+        path = self.directory / "bit24.wav"
+        # 0.5、0、-1。24bitはリトルエンディアンの3バイト。
+        frames = b"\x00\x00\x40" + b"\x00\x00\x00" + b"\x00\x00\x80"
+        with wave.open(str(path), "wb") as target:
+            target.setnchannels(1)
+            target.setsampwidth(3)
+            target.setframerate(RATE)
+            target.writeframes(frames)
+        np.testing.assert_allclose(wav.read_wav(path), [0.5, 0, -1])
+        path = self.directory / "bit32.wav"
+        pcm = np.array([1073741824, 0, -2147483648], dtype="<i4")
+        with wave.open(str(path), "wb") as target:
+            target.setnchannels(1)
+            target.setsampwidth(4)
+            target.setframerate(RATE)
+            target.writeframes(pcm.tobytes())
+        np.testing.assert_allclose(wav.read_wav(path), [0.5, 0, -1])
+
+    def test_3チャンネルは平均(self):
+        path = self.directory / "tri.wav"
+        pcm = np.array([3, 9, 0, -3, 3, 3], dtype="<i2")
+        with wave.open(str(path), "wb") as target:
+            target.setnchannels(3)
+            target.setsampwidth(2)
+            target.setframerate(RATE)
+            target.writeframes(pcm.tobytes())
+        np.testing.assert_allclose(wav.read_wav(path), [4 / 32768, 1 / 32768])
+
+    def test_高いレートは8kHzになり定数と低い音を保つ(self):
+        for rate in (16000, 44100, 48000):
+            path = self.directory / f"dc-{rate}.wav"
+            write_wav(path, np.full(rate, 0.25, dtype=np.float32), rate=rate)
+            converted = wav.read_wav(path)
+            self.assertEqual(len(converted), RATE)
+            np.testing.assert_allclose(converted[400:-400], 0.25, atol=0.01)
+            path = self.directory / f"tone-{rate}.wav"
+            times = np.arange(rate) / rate
+            write_wav(path, (0.5 * np.sin(2 * np.pi * 1000 * times)).astype(np.float32), rate=rate)
+            converted = wav.read_wav(path)
+            self.assertEqual(len(converted), RATE)
+            expected = 0.5 * np.sin(2 * np.pi * 1000 * np.arange(RATE) / RATE)
+            np.testing.assert_allclose(converted[800:-800], expected[800:-800], atol=0.02)
+
+    def test_4kHzより上は8kHzへ折り返さない(self):
+        rate = 48000
+        times = np.arange(rate) / rate
+        write_wav(self.directory / "high.wav", np.sin(2 * np.pi * 6000 * times).astype(np.float32), rate=rate)
+        converted = wav.read_wav(self.directory / "high.wav")
+        self.assertLess(np.max(np.abs(converted[800:-800])), 1e-3)
+
+    def test_インパルスの時刻はレートを変えてもずれない(self):
+        for rate, at in ((48000, 4800), (44100, 4410)):
+            samples = np.zeros(rate, dtype=np.float32)
+            samples[at] = 1
+            write_wav(self.directory / f"click-{rate}.wav", samples, rate=rate)
+            self.assertEqual(int(np.argmax(np.abs(wav.read_wav(self.directory / f"click-{rate}.wav")))), 800)
+
+    def test_48kHzの同じ音声は照合できる(self):
+        rate = 48000
+        audio = np.random.RandomState(1).uniform(-0.5, 0.5, 90 * rate).astype(np.float32)
+        delay = int(0.28 * rate)
+        write_wav(self.directory / "late.wav", audio[delay:], rate=rate)
+        write_wav(self.directory / "early.wav", audio, rate=rate)
+        result = align_audio.align_audio(wav.read_wav(self.directory / "late.wav"),
+                                         wav.read_wav(self.directory / "early.wav"))
+        self.assertTrue(result["success"])
+        self.assertLess(abs(result["segments"][0]["delta"] - 0.28), 0.02)
+
+    def test_低いレートは8kHzへ伸ばす(self):
+        rate = 4000
+        times = np.arange(rate) / rate
+        write_wav(self.directory / "low.wav", (0.5 * np.sin(2 * np.pi * 500 * times)).astype(np.float32), rate=rate)
+        converted = wav.read_wav(self.directory / "low.wav")
+        self.assertEqual(len(converted), RATE)
+        expected = 0.5 * np.sin(2 * np.pi * 500 * np.arange(RATE) / RATE)
+        np.testing.assert_allclose(converted[800:-800], expected[800:-800], atol=0.02)
+
+    def test_読めないWAVはエラー(self):
         (self.directory / "broken.wav").write_bytes(b"not a wav")
         with self.assertRaises(ValueError):
             wav.read_wav(self.directory / "broken.wav")
+        payload = struct.pack("<f", 0.25)
+        fmt = struct.pack("<HHIIHH", 3, 1, RATE, RATE * 4, 4, 32)
+        chunk = b"fmt " + struct.pack("<I", 16) + fmt + b"data" + struct.pack("<I", len(payload)) + payload
+        (self.directory / "float.wav").write_bytes(b"RIFF" + struct.pack("<I", 4 + len(chunk)) + b"WAVE" + chunk)
+        with self.assertRaises(ValueError):
+            wav.read_wav(self.directory / "float.wav")
 
     def test_f32は生のfloatのPCM(self):
         path = self.directory / "raw.f32"
@@ -222,12 +306,12 @@ class MakeRefWavTests(MakeRunner):
         self.assertFalse(report["align"]["success"])
         self.assertTrue(report["reference_fallback"])
 
-    def test_形式の違うWAVも対象局へ戻る(self):
+    def test_読めないWAVも対象局へ戻る(self):
         argv = self.prepare(lambda audio: audio) + ["--sid", "211"]
-        write_wav(self.directory / "ref.wav", noise(5, 1), rate=16000)
+        (self.directory / "ref.wav").write_bytes(b"not a wav")
         code, converted, api, log = self.run_make(argv, fetch=lambda *a: "<packet/>")
         self.assertEqual(code, 0)
-        self.assertIn("実況音声照合に失敗したため対象局へ戻ります", log)
+        self.assertIn("実況音声照合に失敗したため対象局へ戻ります: WAVを読めません", log)
         api.assert_called_once()
 
     def test_引数の組み合わせの誤りを拒否する(self):

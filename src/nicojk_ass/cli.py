@@ -103,7 +103,7 @@ def build_parser():
     target.add_argument("--start", type=_time_arg, help="対象の録画の先頭の時刻")
     target.add_argument("--end", type=_time_arg, help="対象の録画の末尾の時刻")
     target.add_argument("--program-start", type=_time_arg, help="録画した放送の開始時刻(省略時は--start)")
-    target.add_argument("--wav", help="対象の音声(8kHz・16bitのWAV)。--ref-wavと一緒に使う")
+    target.add_argument("--wav", help="対象の音声(PCMのWAV)。--ref-wavと一緒に使う")
     target.add_argument("--spans", help="本編の区間のJSON({\"spans\": [[開始, 終了], ...]}、対象の時刻での秒)。方式Dで使う")
     target.add_argument("--comments-file", help="ローカルのコメントファイル(XML/JKL)")
     target.add_argument("--comments-start", type=_time_arg,
@@ -130,7 +130,7 @@ def build_parser():
     ref.add_argument("--mode", choices=("replace", "merge"),
                      help="replaceは基準のコメントだけ、mergeは対象の局のコメントと統合する(既定はmerge)")
     ref.add_argument("--timemap", help="基準から対象への時刻対応表(JSON)")
-    ref.add_argument("--ref-wav", help="基準の音声(8kHz・16bitのWAV)。対象の音声と照合して対応表を作る")
+    ref.add_argument("--ref-wav", help="基準の音声(PCMのWAV)。対象の音声と照合して対応表を作る")
 
     out = make.add_argument_group("出力")
     out.add_argument("--output", action="append", type=_output_arg, metavar="WxH=PATH",
@@ -171,8 +171,8 @@ def build_parser():
     plan.add_argument("--report", help="結果を書き出すファイル(省略時は標準出力)")
 
     align = sub.add_parser("align", help="音声照合だけを行う(開発用)")
-    align.add_argument("--wav", required=True, help="対象の音声(8kHz・16bitのWAV)")
-    align.add_argument("--ref-wav", required=True, help="基準の音声(8kHz・16bitのWAV)")
+    align.add_argument("--wav", required=True, help="対象の音声(PCMのWAV)")
+    align.add_argument("--ref-wav", required=True, help="基準の音声(PCMのWAV)")
     align.add_argument("--report", help="結果をJSONで書き出すファイル")
     return parser
 

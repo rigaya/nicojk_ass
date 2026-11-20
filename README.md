@@ -194,10 +194,10 @@ ASSの時刻0は取得範囲の始まりです。取得範囲の始まりは`録
 
   | オプション | 内容 | デフォルト |
   |---|---|---|
-  | `--wav F` | 対象の音声。16bit・8kHzのWAV(モノラルかステレオ。ステレオは平均する) | `--ts`ならTSからデコードして作る |
+  | `--wav F` | 対象の音声。PCMのWAV。 | `--ts`ならTSからデコードして作る |
   | `--ref-wav F` | 別の局の音声(`--wav`と同じ形式) | なし |
   | `--decoder amatsukaze=PATH` | TSのデコードにAmatsukazeCLIを使う。`PATH --mode nicojk_wav -i TS -s SID -o WAV`を実行し、`WAV.json`を読む | `--ts`ならffmpeg、それ以外はなし(TSをデコードしない) |
-  | `--decoder ffmpeg[=PATH]` | TSのデコードにffmpegを使う。主音声を8kHz・16bit・モノラルにする。ドロップは無音で埋め、映像と音声の先頭のずれはWAVの先頭を切るか無音を足して合わせる。PATHを省くと`ffmpeg`を探す | 同上 |
+  | `--decoder ffmpeg[=PATH]` | TSのデコードにffmpegを使う。ドロップは無音で埋め、映像と音声の先頭のずれはWAVの先頭を切るか無音を足して合わせる。PATHを省くと`ffmpeg`を探す | 同上 |
   | `--work-dir D` | デコードしたWAVの置き場所 | OSの一時フォルダに作り、終わったら消す |
   | `--keep-work` | デコードしたWAVを消さずに残す | 消す |
 
