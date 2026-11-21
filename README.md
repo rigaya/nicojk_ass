@@ -32,7 +32,7 @@ nicojk_assの実行ファイルを配布しているのでこれを直接実行�
 
 ### nicojk_ass 実行ファイル
 
-[こちら](https://github.com/rigaya/nikojk_ass/releases)から、環境に合うものをダウンロード・展開して実行してください。
+[こちら](https://github.com/rigaya/nicojk_ass/releases)から、環境に合うものをダウンロード・展開して実行してください。
 
 ```sh
 ./nicojk_ass make --sid 211 --start 2026-11-19T21:00:00 --end 2026-11-19T21:30:00 --output 1920x1080=out.ass
