@@ -104,7 +104,8 @@ class Fixture:
 
     def new_finder(self):
         client = syoboi.SyoboiClient(self.cache_dir, self.fetch, lambda: self.now, self.sleep, self.logs.append)
-        return finder.Finder(self.cache_dir, client, self.read_ts, self.channels, self.services, self.logs.append)
+        return finder.Finder(self.cache_dir, client, self.read_ts, self.channels, self.services, self.logs.append,
+                             lambda: self.now)
 
     def fetch(self, url):
         self.requests.append(url)

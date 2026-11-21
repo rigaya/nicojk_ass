@@ -305,7 +305,8 @@ class AltTests(AltRunner):
         code, converted, log, report = self.run_alt(self.search(), duration=1800)
         self.assertEqual(code, 0, log)
         detail = report["comment_align"]
-        self.assertEqual([c["sid"] for c in detail["candidates"]], [333, 1064])
+        # 10/12のAT-Xの放送(あとの放送)も最後の候補になる
+        self.assertEqual([c["sid"] for c in detail["candidates"]], [333, 1064, 333])
         self.assertTrue(all(c["skipped"] for c in detail["candidates"]))
         self.assertTrue(report["reference_fallback"])
         self.assertTrue(all(t.endswith("ｗｗｗ") or t == "草" for t in texts(converted)))

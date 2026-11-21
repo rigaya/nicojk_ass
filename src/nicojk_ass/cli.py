@@ -120,7 +120,7 @@ def build_parser():
     ref.add_argument("--ref-end", type=_time_arg, help="基準の録画の末尾の時刻")
     ref.add_argument("--ref-comments-file", help="基準のコメントファイル(XML/JKL)")
     ref.add_argument("--alt", choices=("replace", "merge"),
-                     help="先行放送・同時刻の放送の録画を--search-dirから探して基準にする"
+                     help="同じ回の別の局の放送(先・同時刻・あと)の録画を--search-dirから探して基準にする"
                           "(replaceは基準のコメントだけ、mergeは対象の局のコメントと統合する)")
     ref.add_argument("--search-dir", action="append", default=[], metavar="DIR",
                      help="--altで録画を探すフォルダ(繰り返し可。サブフォルダは見ない)")
@@ -159,7 +159,7 @@ def build_parser():
     make.add_argument("--work-dir", help="デコードしたWAVの置き場所(既定はOSの一時フォルダに作り、終わったら消す)")
     make.add_argument("--keep-work", action="store_true", help="デコードしたWAVを残す(調査用)")
 
-    plan = sub.add_parser("plan", help="先行放送の録画を探す処理だけを行い、結果をJSONで出す(デコードと照合はしない)")
+    plan = sub.add_parser("plan", help="別の局の録画を探す処理だけを行い、結果をJSONで出す(デコードと照合はしない)")
     plan.add_argument("--sid", type=int, help="対象の局のServiceId")
     plan.add_argument("--channel", type=_channel_arg, help="対象の実況チャンネル(放送の特定にはServiceIdが要る)")
     plan.add_argument("--start", required=True, type=_time_arg, help="対象の録画の先頭の時刻")
@@ -785,7 +785,7 @@ def _run_make(args, work):
 
 
 def run_plan(args):
-    """先行放送の録画を探す処理だけを行い、結果をJSONで出す。終了コードは0(見つからなくても0)、エラーは1。"""
+    """別の局の録画を探す処理だけを行い、結果をJSONで出す。終了コードは0(見つからなくても0)、エラーは1。"""
     if args.sid is None:
         log("warning: cannot identify the broadcast because --sid is missing")
     program_start = args.program_start if args.program_start is not None else args.start

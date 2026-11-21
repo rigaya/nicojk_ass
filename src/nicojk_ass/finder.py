@@ -7,6 +7,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 import unicodedata
 from urllib.parse import quote
 import xml.etree.ElementTree as ET
@@ -19,6 +20,8 @@ PLAN_SCHEMA = 1
 SEARCH_RANGE_MINUTES = 30
 TARGET_TOLERANCE_SECONDS = 10 * 60
 REFERENCE_TOLERANCE_SECONDS = 5 * 60
+# 過去ログAPIは5分ごとに集める(集めるのに3分ほどかかる)ので、あとの放送は終わってから10分たつまで使わない
+LATER_READY_SECONDS = 10 * 60
 MAX_TS_FILES = 78
 FIRST_PASS_TS_FILES = 3
 JST = timezone(timedelta(hours=9))
@@ -79,8 +82,9 @@ class Finder:
     read_tsは(path)を受け取り、TsInfoを返す。"""
 
     def __init__(self, cache_dir, client=None, read_ts=None, channels=None, comment_services=None,
-                 log=lambda message: print(message, file=sys.stderr)):
+                 log=lambda message: print(message, file=sys.stderr), now=time.time):
         self.cache_dir = cache_dir
+        self.now = now
         self.log_func = log
         self.client = client or SyoboiClient(cache_dir, log=self.log)
         self.read_ts = read_ts
@@ -185,7 +189,7 @@ class Finder:
                 "same_time": abs(_item_start(item) - _item_start(target)) <= REFERENCE_TOLERANCE_SECONDS,
                 "recording": None})
         if not candidates:
-            self.log(_PREFIX + "no earlier or simultaneous broadcast with live comments on another channel")
+            self.log(_PREFIX + "no other broadcast with live comments on another channel")
             return
         title_xml = self.client.load(f"TitleLookup&TID={tid}", True)
         title_item = next(i for i in title_xml.iter("TitleItem") if _int(i, "TID") == tid)
@@ -210,7 +214,7 @@ class Finder:
     def _select_candidates(self, broadcasts, target, channel, tid, count, sid):
         target_start = _item_start(target)
         target_jk = self.comment_services.get(sid)
-        candidates = []
+        candidates, later = [], []
         for item in broadcasts.iter("ProgItem"):
             if _deleted(item) or _int(item, "ChID") == channel or _int(item, "TID") != tid \
                     or item.findtext("Count") != count:
@@ -224,8 +228,15 @@ class Finder:
                     abs(difference) <= REFERENCE_TOLERANCE_SECONDS
                     and self.comment_services.get(candidate[1]) != target_jk):
                 candidates.append(item)
-        candidates.sort(key=_item_start)  # 安定ソート(応答の順を保つ)
-        return candidates
+            elif difference > REFERENCE_TOLERANCE_SECONDS:
+                # あとの放送は、過去ログにコメントが入ってから使う(未来の時刻を指定するとAPIはエラーを返す)
+                if parse_jst(item.findtext("EdTime")) + LATER_READY_SECONDS <= self.now():
+                    later.append(item)
+                else:
+                    self.log(_PREFIX + f"skipping the later broadcast on {candidate[2]} {_format_jst(_item_start(item))}"
+                             " because its comments are not in the past logs yet")
+        # 先の放送・同時刻の放送を先に、あとの放送はそのあとに使う(それぞれ早い順。安定ソートで応答の順を保つ)
+        return sorted(candidates, key=_item_start) + sorted(later, key=_item_start)
 
     def _list_files(self, search_dirs, exclude):
         excluded = {os.path.normcase(os.path.abspath(p)) for p in exclude}
@@ -295,4 +306,4 @@ class Finder:
                         self.log(_PREFIX + f"reference recording {path}")
                         return
                 self.log(_PREFIX + "no recording found for this candidate")
-        self.log(_PREFIX + "no usable recording of an earlier or simultaneous broadcast")
+        self.log(_PREFIX + "no usable recording of another broadcast")

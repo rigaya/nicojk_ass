@@ -18,7 +18,7 @@ class FindTests(FinderTestCase):
         self.assertEqual(len(f.reads), 1)
         self.assertIn("Range=20261011_003000-20261011_013000", f.requests[0])
 
-    def test_最初の放送なら基準を選ばない(self):
+    def test_最初の放送であとの放送の録画もなければ基準を選ばない(self):
         f = self.f
         f.range = f.episodes
         self.assertIsNone(f.find(1064, EARLIER))
@@ -403,8 +403,8 @@ class SimultaneousTests(FinderTestCase):
     def test_候補の前後五分の境界ではjk番号によって選別する(self):
         from finder_fixture import jst_text
         cases = [(False, -301, True), (False, -300, True), (False, -299, True), (False, 299, True),
-                 (False, 300, True), (False, 301, False), (True, -301, True), (True, -300, False),
-                 (True, -299, False), (True, 299, False), (True, 300, False), (True, 301, False)]
+                 (False, 300, True), (False, 301, True), (True, -301, True), (True, -300, False),
+                 (True, -299, False), (True, 299, False), (True, 300, False), (True, 301, True)]
         for same_jk, difference, found in cases:
             with self.subTest(same_jk=same_jk, difference=difference):
                 self.setUp()
@@ -418,6 +418,37 @@ class SimultaneousTests(FinderTestCase):
                 self.assertEqual(len(f.reads), 1 if found else 0)
 
 
+class LaterBroadcastTests(FinderTestCase):
+    ATX_START = jst(2026, 10, 12, 21)
+    ATX_END = jst(2026, 10, 12, 21, 30)
+
+    def test_先の放送の録画がなければあとの放送の録画を基準にする(self):
+        f = self.f
+        reference = f.add_recording("ゾンビさがしてます_02_AT-X.ts", 333, self.ATX_START)
+        plan = f.plan()
+        self.assertEqual(plan["reference"], {"path": reference, "sid": 333, "candidate": 1})
+
+    def test_先の放送の録画があればあとの放送より優先する(self):
+        f = self.f
+        f.add_recording("ゾンビさがしてます_02_AT-X.ts", 333, self.ATX_START)
+        reference = f.add_recording("ゾンビさがしてます_02_テレビ朝日.ts", 1064, EARLIER)
+        self.assertEqual(f.find(), reference)
+
+    def test_あとの放送は終わってから十分たつまで使わない(self):
+        # しょぼいカレンダーの通信の間隔を待つと時計が数十秒進むので、使わない側は境界の60秒前にする
+        for now, found in ((self.ATX_END + 10 * 60 - 60, False), (self.ATX_END + 10 * 60, True)):
+            with self.subTest(now=now):
+                self.setUp()
+                f = self.f
+                f.now = now
+                reference = f.add_recording("ゾンビさがしてます_02_AT-X.ts", 333, self.ATX_START)
+                plan = f.plan()
+                self.assertEqual([c["sid"] for c in plan["candidates"]], [1064, 333] if found else [1064])
+                self.assertEqual(plan["reference"]["path"] if plan["reference"] else None,
+                                 reference if found else None)
+                self.assertEqual(any("not in the past logs yet" in line for line in f.logs), not found)
+
+
 class PlanJsonTests(FinderTestCase):
     def test_planに特定した放送と候補と確かめた録画が入る(self):
         f = self.f
@@ -429,8 +460,9 @@ class PlanJsonTests(FinderTestCase):
         self.assertEqual(plan["program"]["count"], "2")
         self.assertEqual(plan["program"]["title"], "#ゾンビさがしてます")
         self.assertEqual(plan["target"], {"sid": 151, "jk": 151, "name": "BS朝日", "comments": "ok"})
-        self.assertEqual(len(plan["candidates"]), 1)
-        self.assertEqual(plan["candidates"][0]["sid"], 1064)
+        # テレ朝(先の放送)、AT-X(10/12のあとの放送)の順
+        self.assertEqual([c["sid"] for c in plan["candidates"]], [1064, 333])
+        self.assertEqual(plan["candidates"][1]["recording"], None)
         self.assertEqual(plan["candidates"][0]["jk"], 5)
         self.assertEqual(plan["candidates"][0]["recording"], reference)
         self.assertEqual({p["path"]: p["result"] for p in plan["probed"]},
