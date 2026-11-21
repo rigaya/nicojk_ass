@@ -102,7 +102,7 @@ def _write_atomic(path, text):
 def check_result(root):
     code = root.find("Result/Code")
     if code is None or (code.text or "").strip() != "200":
-        raise OSError("しょぼいカレンダーの応答が正常ではありません")
+        raise OSError("the Syoboi calendar response is not valid")
 
 
 class SyoboiClient:

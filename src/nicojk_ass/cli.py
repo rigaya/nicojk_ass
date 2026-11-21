@@ -40,16 +40,16 @@ def _offset_arg(value):
     try:
         number = Decimal(value)
     except InvalidOperation:
-        raise argparse.ArgumentTypeError("有限の秒数を指定してください")
+        raise argparse.ArgumentTypeError("specify a finite number of seconds")
     if not number.is_finite() or abs(number) >= Decimal(10) ** 12:
-        raise argparse.ArgumentTypeError("有限の秒数を指定してください")
+        raise argparse.ArgumentTypeError("specify a finite number of seconds")
     return number
 
 
 def _channel_arg(value):
     text = value[2:] if value.startswith("jk") else value
     if not text.isdigit() or int(text) <= 0:
-        raise argparse.ArgumentTypeError("実況チャンネルはjkN(Nは正の整数)で指定してください")
+        raise argparse.ArgumentTypeError("a live-comment channel must be jkN, where N is a positive integer")
     return int(text)
 
 
@@ -65,19 +65,19 @@ def read_spans(path):
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
     if not isinstance(data, dict) or not isinstance(data.get("spans"), list):
-        raise ValueError("spansの並びがありません")
+        raise ValueError("spans is missing")
     spans = []
     for item in data["spans"]:
         if not isinstance(item, (list, tuple)) or len(item) != 2:
-            raise ValueError(f"区間は[開始, 終了]の形にしてください: {item!r}")
+            raise ValueError(f"a span must be [start, end]: {item!r}")
         start, end = item
         if isinstance(start, bool) or isinstance(end, bool) \
                 or not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
-            raise ValueError(f"区間は数値にしてください: {item!r}")
+            raise ValueError(f"a span must be numeric: {item!r}")
         if not (start == start and end == end) or abs(start) == float("inf") or abs(end) == float("inf"):
-            raise ValueError(f"区間は有限の数値にしてください: {item!r}")
+            raise ValueError(f"a span must be finite: {item!r}")
         if not start < end:
-            raise ValueError(f"区間の開始は終了より前にしてください: {item!r}")
+            raise ValueError(f"a span start must be before its end: {item!r}")
         spans.append((float(start), float(end)))
     return spans
 
@@ -85,7 +85,7 @@ def read_spans(path):
 def _output_arg(value):
     match = re.fullmatch(r"(\d+)x(\d+)=(.+)", value, re.DOTALL)
     if not match or int(match.group(1)) <= 0 or int(match.group(2)) <= 0:
-        raise argparse.ArgumentTypeError("--outputはWxH=PATHの形で指定してください")
+        raise argparse.ArgumentTypeError("--output must be WxH=PATH")
     return int(match.group(1)), int(match.group(2)), match.group(3)
 
 
@@ -187,13 +187,13 @@ def _is_comment_align(args):
 
 def _validate_make(parser, args):
     if not args.output and not args.comments_output:
-        parser.error("--outputか--comments-outputを指定してください")
+        parser.error("specify --output or --comments-output")
     if args.ts:
         if args.start is not None or args.end is not None:
             parser.error("--ts and --start/--end cannot be used together")
     else:
         if args.start is None or args.end is None:
-            parser.error("対象の時刻がありません。--startと--end、または--tsを指定してください")
+            parser.error("the target time is missing; specify --start and --end, or --ts")
         elif args.end <= args.start:
             parser.error("--end must be after --start")
     if args.timemap and args.ref_wav:
@@ -212,16 +212,16 @@ def _validate_make(parser, args):
     if args.ref_wav and not args.wav and not args.ts:
         parser.error("--ref-wav requires --wav or --ts")
     if args.timemap or args.ref_wav or _is_comment_align(args):
-        option = "--timemap" if args.timemap else "--ref-wav" if args.ref_wav else "基準の局と時刻(方式D)"
+        option = "--timemap" if args.timemap else "--ref-wav" if args.ref_wav else "reference channel and time (method D)"
         if args.ref_start is None or args.ref_end is None:
-            if option.startswith("基準の局"):
-                parser.error("基準の指定には--timemap、--ref-wav、--ref-ts、--altのどれか、"
-                             "または--ref-startと--ref-end(方式D)が必要です")
-            parser.error(f"{option}には--ref-startと--ref-endが必要です")
+            if option.startswith("reference channel"):
+                parser.error("a reference needs --timemap, --ref-wav, --ref-ts, --alt, "
+                             "or both --ref-start and --ref-end (method D)")
+            parser.error(f"{option} requires --ref-start and --ref-end")
         if args.ref_end <= args.ref_start:
             parser.error("--ref-end must be after --ref-start")
         if args.ref_channel is None and args.ref_sid is None and not args.ref_comments_file:
-            parser.error(f"{option}には--ref-sid、--ref-channel、--ref-comments-fileのどれかが必要です")
+            parser.error(f"{option} requires one of --ref-sid, --ref-channel, or --ref-comments-file")
         if args.comments_file or args.comments_start is not None or args.comments_offset != 0:
             parser.error(f"{option} and --comments-file/--comments-start/--comments-offset cannot be used together")
     elif args.alt or args.ref_ts:
@@ -234,9 +234,9 @@ def _validate_make(parser, args):
         if args.comments_file or args.comments_start is not None or args.comments_offset != 0:
             parser.error(f"{option} and --comments-file/--comments-start/--comments-offset cannot be used together")
     if args.comments_file_auto and not args.comments_file:
-        parser.error("--comments-file-autoには--comments-fileが必要です")
+        parser.error("--comments-file-auto requires --comments-file")
     if args.fontsize is not None and args.fontsize <= 0:
-        parser.error("--fontsizeは正の整数にしてください")
+        parser.error("--fontsize must be a positive integer")
 
 
 # ------------------------------------------------------------------ #
@@ -252,7 +252,7 @@ def _normalize(value):
 def _json_default(value):
     if isinstance(value, Decimal):
         return float(value)
-    raise TypeError(f"JSONにできない値です: {value!r}")
+    raise TypeError(f"value is not JSON serializable: {value!r}")
 
 
 def _resolve_jk(sid, channel):
@@ -269,7 +269,7 @@ def _resolve_jk(sid, channel):
 def _rebase_file_comments(root, start, end):
     """読み込み済みのコメントを[start, end]を基準にしたvposにして、XML文字列で返す。"""
     xml_str = rebase_file_vpos(root, start, end)
-    log(f"取得コメント数: {count_chats(xml_str)}件")
+    log(f"comments fetched: {count_chats(xml_str)}")
     return xml_str
 
 
@@ -314,14 +314,14 @@ def _make_normal(args, report):
 
     jk, name = _resolve_jk(args.sid, args.channel)
     if not comments_file and jk is None:
-        log("対象の局に実況チャンネルがありません")
+        log("the target channel has no live comments")
         report["reason"] = "no_channel"
         raise NicoJKExit(EXIT_CHANNEL_NOT_FOUND)
-    channel_text = f"jk{jk}" if jk else "jkなし"
-    log(f"コメント取得元: {comments_file or 'API'} / {channel_text} / "
-        f"取得範囲 {fetch_start} ～ {fetch_end} / 番組開始 {program} / "
-        f"基準 {reference} / offset {args.comments_offset}"
-        + (" / 先頭を番組開始に合わせる" if relative else ""))
+    channel_text = f"jk{jk}" if jk else "no jk"
+    log(f"comment source: {comments_file or 'API'} / {channel_text} / "
+        f"range {fetch_start} - {fetch_end} / program start {program} / "
+        f"reference {reference} / offset {args.comments_offset}"
+        + (" / aligning the start to the program start" if relative else ""))
 
     report["source"] = "file" if comments_file else "api"
     report["fetch"] = {"channel": f"jk{jk}" if jk else None, "file": comments_file,
@@ -338,7 +338,7 @@ def _align_audio(args, report):
         from .wav import read_wav
     except ImportError as error:
         log(f"audio alignment failed, falling back to the target channel: cannot import numpy: {error}")
-        report["align"] = {"success": False, "reason": f"numpyを読み込めません: {error}", "segments": [], "seconds": 0}
+        report["align"] = {"success": False, "reason": f"cannot import numpy: {error}", "segments": [], "seconds": 0}
         return None
     try:
         target, reference = read_wav(args.wav), read_wav(args.ref_wav)
@@ -350,8 +350,8 @@ def _align_audio(args, report):
     report["align"] = {key: result[key] for key in ("success", "reason", "segments", "seconds")}
     log(f"audio alignment: reference {args.ref_wav} / took {result['seconds']:.3f}s / spans {len(result['segments'])}")
     for part in result["segments"]:
-        log(f"実況照合区間: {part['start']:.3f}～{part['end']:.3f}秒 / 基準－対象 {part['delta']:+.3f}秒 / "
-            f"プローブ{part['probes']}本 / 相関比{part['ratio']:.3f}")
+        log(f"audio alignment span: {part['start']:.3f}-{part['end']:.3f}s / reference-target {part['delta']:+.3f}s / "
+            f"probes {part['probes']} / ratio {part['ratio']:.3f}")
     if not result["success"]:
         log(f"audio alignment failed, falling back to the target channel: {result['reason']}")
         return None
@@ -408,46 +408,46 @@ def _apply_ts_target(args, report, work):
     try:
         timeline = tsinfo.read_timeline(args.ts, args.sid)
     except (OSError, tsinfo.TsInfoError) as error:
-        log(f"対象の録画を読めません: {error}")
+        log(f"cannot read the target recording: {error}")
         raise NicoJKExit(EXIT_ERROR)
     if args.sid is None:
         args.sid = timeline["sid"]
     report["target"]["sid"] = args.sid
     report["target"]["ts"] = args.ts
     if not timeline["has_time"]:
-        log("対象の録画にTOTまたはPCRがないため先頭の時刻を求められません")
+        log("cannot find the start time because the target recording has no TOT or PCR")
         raise NicoJKExit(EXIT_ERROR)
     args.start = _normalize(Decimal(f"{timeline['start']:.6f}"))
     args.end = _normalize(Decimal(f"{timeline['end']:.6f}"))
     report["target"]["start"] = args.start
     report["target"]["end"] = args.end
     if args.end <= args.start:
-        log("対象の録画の長さを求められません")
+        log("cannot determine the length of the target recording")
         raise NicoJKExit(EXIT_ERROR)
     if args.program_start is None:
         program = None
         try:
             program = tsinfo.read_ts_info(args.ts).start_of(args.sid)
         except (OSError, tsinfo.TsInfoError) as error:
-            log(f"警告: 放送の開始時刻を読めないため、録画の先頭の時刻を使います: {error}")
+            log(f"warning: using the start of the recording because the broadcast start time cannot be read: {error}")
         args.program_start = _normalize(Decimal(f"{program:.6f}")) if program is not None else args.start
         report["target"]["program_start"] = args.program_start
-    log(f"対象の録画: sid {args.sid} / 先頭 {args.start} / 末尾 {args.end}")
+    log(f"target recording: sid {args.sid} / start {args.start} / end {args.end}")
     if args.wav or not (args.alt or args.ref_ts or args.ref_wav):
         return
     wav = work.file("target.wav")
     try:
         info = decoder.decode(args.decoder[0], args.decoder[1], args.ts, args.sid, wav, timeline)
     except decoder.DecodeError as error:
-        log(f"警告: 対象の音声をデコードできません: {error}")
+        log(f"warning: cannot decode the target audio: {error}")
         report["target_decode"] = {"success": False, "reason": str(error)}
         if args.ref_wav:
             raise NicoJKExit(EXIT_ERROR)
         return
     report["target_decode"] = {"success": info["has_time"], "ts": args.ts, "wav": wav, **info}
     if not info["has_time"]:
-        log("警告: 対象の録画にTOTがないため音声照合を行いません")
-        report["target_decode"]["reason"] = "TOTがありません"
+        log("warning: skipping audio alignment because the target recording has no TOT")
+        report["target_decode"]["reason"] = "no TOT"
         return
     args.wav = wav
 
@@ -456,25 +456,25 @@ def _decode_reference(args, report, work, ts_path, sid):
     """基準のTSをデコードし、args.ref_wav・ref_start・ref_end・ref_sidを設定する。
     使えないときは理由を警告に出してFalseを返す。"""
     if not args.wav:
-        log("警告: 対象の音声(--wav)がないため基準の録画を使いません")
-        report["decode"] = {"success": False, "reason": "--wavがありません"}
+        log("warning: not using the reference recording because the target audio (--wav) is missing")
+        report["decode"] = {"success": False, "reason": "--wav is missing"}
         return False
     if args.decoder is None:
         log("warning: cannot decode the reference recording without --decoder")
-        report["decode"] = {"success": False, "reason": "--decoderがありません"}
+        report["decode"] = {"success": False, "reason": "--decoder is missing"}
         return False
     wav = work.file("reference.wav")
     try:
         info = decoder.decode(args.decoder[0], args.decoder[1], ts_path, sid, wav)
     except decoder.DecodeError as error:
-        log(f"警告: 基準の録画のデコードに失敗しました: {error}")
+        log(f"warning: failed to decode the reference recording: {error}")
         report["decode"] = {"success": False, "reason": str(error), "ts": ts_path}
         return False
     report["decode"] = {"success": True, "ts": ts_path, "wav": wav, **info}
     if not info["has_time"]:
         log("warning: not using the reference because it has no TOT and the start time is unknown")
         report["decode"]["success"] = False
-        report["decode"]["reason"] = "TOTがありません"
+        report["decode"]["reason"] = "no TOT"
         return False
     # 今のAmatsukazeの方式Aと同じ値: 丸めた先頭の時刻と、そこから音声の長さ分
     args.ref_wav = wav
@@ -492,8 +492,8 @@ def _prepare_reference(args, report, work):
         report["alt"] = None
         return "audio" if _decode_reference(args, report, work, args.ref_ts, args.ref_sid) else None
     if args.sid is None:
-        log("警告: --altには--sidが必要です。対象の局のコメントを使います")
-        report["alt"] = {"error": "--sidがありません"}
+        log("warning: --alt requires --sid; using the target channel's comments")
+        report["alt"] = {"error": "--sid is missing"}
         return None
     plan = _alt_plan(args, args.cache_dir or default_cache_dir())
     report["alt"] = plan
@@ -506,10 +506,11 @@ def _prepare_reference(args, report, work):
     if unrelated or not plan["candidates"]:
         # 遅れネットでは対象の局のコメントが別の番組のものなので、方式Dは使えない。
         if reference is not None:
-            log("警告: 対象の音声(--wav)がないため基準の録画を使いません")
-            report["decode"] = {"success": False, "reason": "--wavがありません"}
+            log("warning: not using the reference recording because the target audio (--wav) is missing")
+            report["decode"] = {"success": False, "reason": "--wav is missing"}
         return None
-    log(("基準の録画があっても対象の音声(--wav)がないため、" if reference is not None else "基準の録画がないため、")
+    log(("the reference recording exists but the target audio (--wav) is missing, so "
+         if reference is not None else "no reference recording, so ")
         + "using method D on the candidate comments")
     args.ref_candidates = plan["candidates"]
     return "comment"
@@ -528,7 +529,7 @@ def _align_comments(args, report, spans):
 
     jk, _ = _resolve_jk(args.sid, args.channel)
     if jk is None:
-        log("対象の局に実況チャンネルがありません")
+        log("the target channel has no live comments")
         report["reason"] = "no_channel"
         raise NicoJKExit(EXIT_CHANNEL_NOT_FOUND)
     log(f"comment source: API / jk{jk} / range {start} - {end} / method D")
@@ -537,11 +538,11 @@ def _align_comments(args, report, spans):
     try:
         target_rows = align_comment.comments_from_xml(target_xml, float(start), float(end))
     except (ET.ParseError, ValueError) as error:
-        log(f"コメントの読み込み失敗: {error}")
+        log(f"failed to read comments: {error}")
         raise NicoJKExit(EXIT_ERROR)
 
     def fall_back(reason):
-        log(f"警告: コメント照合に失敗したため対象局のコメントだけを使います: {reason}")
+        log(f"warning: comment alignment failed, using only the target channel's comments: {reason}")
         detail["reason"] = reason
         report["source"] = "api"
         report["reference_fallback"] = True
@@ -572,7 +573,7 @@ def _align_comments(args, report, spans):
             else:
                 ref_jk, _ = _resolve_jk(args.ref_sid, args.ref_channel)
                 if ref_jk is None:
-                    reason = "基準の局に実況チャンネルがありません"
+                    reason = "the reference channel has no live comments"
                 else:
                     reference_xml = fetch_api_comments(f"jk{ref_jk}", ref_origin, ref_limit, args.api_url)
             if reason is None:
@@ -610,11 +611,11 @@ def _align_comments(args, report, spans):
     detail["segments"] = [{"start": part["start"], "end": part["end"], "delta": part["delta"],
                            "ratio": part["ratio"], "support": part.get("support"), "windows": part.get("windows")}
                           for part in found]
-    log(f"コメント照合: 対象{len(target_rows)}件・基準{len(reference_rows)}件 / 本編の区間 "
-        + ("あり" if spans else "なし") + f" / 照合 {detail['seconds']:.3f}秒 / 区間 {len(found)}")
+    log(f"comment alignment: target {len(target_rows)} / reference {len(reference_rows)} / program spans "
+        + ("present" if spans else "absent") + f" / took {detail['seconds']:.3f}s / spans {len(found)}")
     for part in found:
         log(f"comment alignment span: {part['start']:.3f}-{part['end']:.3f}s / reference-target {part['delta']:+.3f}s / "
-            f"山の比{part['ratio']:.2f} / 一致{part.get('support', 0)}件")
+            f"peak ratio {part['ratio']:.2f} / matches {part.get('support', 0)}")
     if not found or not timemap:
         return fall_back("could not estimate a shift for any span")
     return _make_timemap(args, report, timemap, "comment_align", reference_xml, target_xml)
@@ -671,7 +672,7 @@ def _make_timemap(args, report, timemap, source="timemap", reference_xml=None, t
                     xml_str = merge_comments(xml_str, target_xml, args.mark_reference_color)
                     report["merged"] = True
     except (OSError, UnicodeError, ET.ParseError, ValueError, TypeError, InvalidOperation) as error:
-        log(f"コメントの時刻変換・統合失敗: {error}")
+        log(f"failed to convert and merge comments: {error}")
         raise NicoJKExit(EXIT_ERROR)
     return xml_str
 
@@ -683,9 +684,9 @@ def _write_comments_output(args, xml_str):
         with open(args.comments_output, "w", encoding="utf-8", newline="\n") as f:
             f.write(text)
     except (OSError, ET.ParseError, ValueError) as error:
-        log(f"コメントの書き出し失敗: {error}")
+        log(f"failed to write comments: {error}")
         raise NicoJKExit(EXIT_ERROR)
-    log(f"コメント出力完了: {args.comments_output}")
+    log(f"wrote comments: {args.comments_output}")
 
 
 def _render_outputs(args, xml_str):
@@ -697,12 +698,12 @@ def _render_outputs(args, xml_str):
     try:
         for width, height, path in args.output:
             fontsize = args.fontsize if args.fontsize is not None else default_fontsize(height)
-            log(f"解像度={width}x{height} フォント={args.font!r} フォントサイズ={fontsize} "
-                f"表示秒数={args.display_seconds} 不透明度={args.opacity}")
+            log(f"resolution={width}x{height} font={args.font!r} fontsize={fontsize} "
+                f"duration={args.display_seconds} opacity={args.opacity}")
             run_danmaku2ass(tmp_xml, path, width, height, args.font, fontsize,
                             args.opacity, args.display_seconds)
             fixup_ass(path, width, height, fontsize, args.font)
-            log(f"ASS出力完了: {path}")
+            log(f"wrote ASS: {path}")
     finally:
         os.unlink(tmp_xml)
 
@@ -730,7 +731,7 @@ def _run_make(args, work):
             try:
                 spans = read_spans(args.spans)
             except (OSError, UnicodeError, ValueError) as error:
-                log(f"本編の区間を読めません: {error}")
+                log(f"cannot read the program spans: {error}")
                 raise NicoJKExit(EXIT_ERROR)
             report["spans"] = {"count": len(spans)}
         xml_str = None
@@ -739,7 +740,7 @@ def _run_make(args, work):
             try:
                 timemap = read_timemap(args.timemap)
             except (OSError, UnicodeError, ValueError, InvalidOperation) as error:
-                log(f"対応表の読み込み失敗: {error}")
+                log(f"failed to read the time map: {error}")
                 raise NicoJKExit(EXIT_ERROR)
         elif args.ref_wav:
             timemap = _align_audio(args, report)
@@ -756,7 +757,7 @@ def _run_make(args, work):
         if xml_str is None:
             if (report.get("alt") or {}).get("target", {}).get("comments") == "unrelated":
                 # 遅れネット・独自枠で基準を使えないとき、対象の局のコメントは別の番組のものなので付けない。
-                log("遅れネット・独自枠で基準の録画を使えないため実況を付けません")
+                log("not adding live comments because a delayed or local broadcast has no usable reference recording")
                 report["reason"] = "unrelated_no_reference"
                 raise NicoJKExit(EXIT_CHANNEL_NOT_FOUND)
             if args.timemap or args.ref_wav or args.alt or args.ref_ts:
@@ -779,14 +780,14 @@ def _run_make(args, work):
                 with open(args.report, "w", encoding="utf-8") as f:
                     json.dump(report, f, ensure_ascii=False, indent=2, default=_json_default)
             except OSError as error:
-                log(f"レポートを書けません: {error}")
+                log(f"cannot write the report: {error}")
     return EXIT_SUCCESS
 
 
 def run_plan(args):
     """先行放送の録画を探す処理だけを行い、結果をJSONで出す。終了コードは0(見つからなくても0)、エラーは1。"""
     if args.sid is None:
-        log("警告: --sidがないため放送を特定できません")
+        log("warning: cannot identify the broadcast because --sid is missing")
     program_start = args.program_start if args.program_start is not None else args.start
     cache_dir = args.cache_dir or default_cache_dir()
     finder = Finder(cache_dir, SyoboiClient(cache_dir, log=lambda m: log(m)), log=log)
@@ -799,7 +800,7 @@ def run_plan(args):
         else:
             print(text)
     except OSError as error:
-        log(f"結果を書けません: {error}")
+        log(f"cannot write the result: {error}")
         return 1
     return 0
 
@@ -810,12 +811,12 @@ def run_align(args):
         from .align_audio import align_audio, align_result_json
         from .wav import read_wav
     except ImportError as error:
-        log(f"numpyを読み込めません: {error}")
+        log(f"cannot import numpy: {error}")
         return 2
     try:
         target, reference = read_wav(args.wav), read_wav(args.ref_wav)
     except (OSError, ValueError) as error:
-        log(f"WAVを読めません: {error}")
+        log(f"cannot read WAV: {error}")
         return 2
     result = align_audio(target, reference)
     text = json.dumps(align_result_json(result, len(target) / 8000, len(reference) / 8000),
@@ -827,10 +828,10 @@ def run_align(args):
         else:
             print(text)
     except OSError as error:
-        log(f"結果を書けません: {error}")
+        log(f"cannot write the result: {error}")
         return 2
-    log(f"音声照合: {result['seconds']:.3f}秒 / 区間 {len(result['segments'])} / "
-        + ("成功" if result["success"] else "失敗: " + result["reason"]))
+    log(f"audio alignment: {result['seconds']:.3f}s / spans {len(result['segments'])} / "
+        + ("success" if result["success"] else "failed: " + result["reason"]))
     return 0 if result["success"] else 1
 
 
@@ -847,7 +848,7 @@ def main(argv=None):
             return run_make(args)
         except NicoJKExit as error:
             return error.code
-    parser.error("不明なコマンドです")
+    parser.error("unknown command")
 
 
 if __name__ == "__main__":

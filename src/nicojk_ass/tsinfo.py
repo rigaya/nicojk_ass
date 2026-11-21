@@ -423,8 +423,8 @@ def read_ts_info(path):
             ret = _scan(parser, file)
             if ret not in (0, 3):
                 if scrambled:
-                    raise TsInfoError("すべてのプログラムがスクランブルされています")
-                raise TsInfoError("TSファイルに情報がありません")
+                    raise TsInfoError("every program is scrambled")
+                raise TsInfoError("the TS file has no program information")
     return TsInfo(list(parser.programs), jst_to_unix(parser.start_raw),
                   jst_to_unix(parser.time) if parser.time is not None else None)
 
@@ -623,14 +623,14 @@ def _choose_service(timeline, sid):
     services = timeline.video_services()
     if sid is not None:
         if sid not in timeline.video_pid:
-            known = ", ".join(str(item) for item in services) or "なし"
-            raise TsInfoError(f"ServiceId {sid} の映像がありません(ファイルにある映像: {known})")
+            known = ", ".join(str(item) for item in services) or "none"
+            raise TsInfoError(f"ServiceId {sid} has no video (video in the file: {known})")
         return sid
     if len(services) == 1:
         return services[0]
     if not services:
-        raise TsInfoError("映像のあるサービスがありません")
-    raise TsInfoError("サービスが複数あります。--sidで選んでください: " + ", ".join(str(item) for item in services))
+        raise TsInfoError("no service has video")
+    raise TsInfoError("more than one service; choose one with --sid: " + ", ".join(str(item) for item in services))
 
 
 def _mpeg2_picture_type(payload):
@@ -777,20 +777,20 @@ def read_timeline(path, sid=None):
         elif timeline is None:
             _parse_head(head, sid)
         if not video:
-            raise TsInfoError("映像の先頭が見つかりません")
+            raise TsInfoError("video start was not found")
         origin = video_origin(video, timeline.video_type.get(chosen))
         if size > len(head):
             file.seek(max(0, size - TAIL_BYTES))
             tail_video, _, _ = _media_pts(file.read(TAIL_BYTES), video_pid, None, -1)
             if not tail_video:
-                raise TsInfoError("映像の末尾が見つかりません")
+                raise TsInfoError("video end was not found")
             # 先頭側は原点だけを残し、末尾はファイルの終わりのPTSにする。
             video = [(origin, None)] + tail_video
         video_pts = [pts for pts, _ in video]
     start, start_rounded, duration, has_time, audio_shift = _times_from(
         video_pts, audio, pcr, timeline.tot, timeline.tot_index, origin)
     if duration <= 0:
-        raise TsInfoError("映像の長さを求められません")
+        raise TsInfoError("cannot determine the video length")
     return {"sid": chosen, "start": start, "start_rounded": start_rounded,
             "end": start + duration, "duration": duration, "has_time": has_time,
             "video_pid": video_pid, "audio_pid": audio_pid, "audio_shift": audio_shift}

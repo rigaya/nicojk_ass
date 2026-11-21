@@ -29,7 +29,7 @@ def parse_decoder(value):
         return kind, path
     if kind == "ffmpeg" and sep in ("", "="):
         return kind, path or "ffmpeg"
-    raise ValueError("--decoderはamatsukaze=<パス>かffmpeg[=<パス>]の形で指定してください")
+    raise ValueError("--decoder must be amatsukaze=<path> or ffmpeg[=<path>]")
 
 
 # AmatsukazeCLIの出力は「AMT [info] ...」の形で、警告とエラーだけをログに残す。
@@ -86,7 +86,7 @@ def decode_amatsukaze(exe, ts_path, sid, wav_path):
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                    env=child_env())
     except OSError as error:
-        fail(f"デコーダーを起動できません: {error}")
+        fail(f"cannot start the decoder: {error}")
     for line in process.stdout:
         text = line.decode(CHILD_ENCODING, "replace").rstrip("\r\n")
         if text:
@@ -103,12 +103,12 @@ def decode_amatsukaze(exe, ts_path, sid, wav_path):
                   "end": float(info["end"]), "duration": float(info["duration"]),
                   "has_time": bool(info["has_time"]), "sid": int(info["sid"])}
     except (OSError, ValueError, KeyError, TypeError) as error:
-        fail(f"デコーダーの結果のJSONを読めません: {error}")
+        fail(f"cannot read the decoder JSON: {error}")
     if not os.path.exists(wav_path):
-        fail("デコーダーがWAVを書きませんでした")
+        fail("the decoder did not write a WAV")
     result["seconds"] = round(time.monotonic() - began, 3)
     log(f"decoded reference audio: {name} / sid {result['sid']} / duration {result['duration']:.1f}s / "
-        f"{result['seconds']:.1f}秒")
+        f"{result['seconds']:.1f}s")
     return result
 
 
@@ -136,14 +136,14 @@ def align_wav(path, shift_seconds, duration_seconds):
         with wave.open(path, "rb") as source:
             channels, width, rate = source.getnchannels(), source.getsampwidth(), source.getframerate()
             if source.getcomptype() != "NONE" or width != 2 or rate != SAMPLE_RATE or channels != 1:
-                raise DecodeError(f"デコード結果が16bit・8kHz・モノラルではありません: {path}")
+                raise DecodeError(f"decoded audio is not 16-bit 8 kHz mono: {path}")
             pcm = source.readframes(source.getnframes())
     except wave.Error as error:
-        raise DecodeError(f"デコード結果のWAVを読めません: {error}")
+        raise DecodeError(f"cannot read the decoded WAV: {error}")
     if not math.isfinite(shift_seconds) or abs(shift_seconds) > MAX_AUDIO_SHIFT:
-        raise DecodeError(f"映像と音声の先頭のずれが大きすぎます({shift_seconds:.3f}秒)")
+        raise DecodeError(f"the audio-to-video shift is too large ({shift_seconds:.3f}s)")
     if not math.isfinite(duration_seconds) or duration_seconds <= 0:
-        raise DecodeError("映像の長さを求められません")
+        raise DecodeError("cannot determine the video length")
     shift = int(round(shift_seconds * SAMPLE_RATE))
     if shift > 0:
         pcm = b"\x00\x00" * shift + pcm
@@ -180,10 +180,10 @@ def decode_ffmpeg(exe, ts_path, sid, wav_path, timeline=None):
               "has_time": bool(info["has_time"]), "sid": int(info["sid"])}
     if not result["has_time"]:
         result["seconds"] = 0.0
-        log(f"警告: {os.path.basename(ts_path)} にTOTまたはPCRがないため先頭の時刻を求められません")
+        log(f"warning: cannot find the start time because {os.path.basename(ts_path)} has no TOT or PCR")
         return result
     if info.get("audio_pid") is None or info.get("audio_shift") is None:
-        raise DecodeError("主音声(AAC)がありません")
+        raise DecodeError("no primary audio (AAC)")
     if os.path.exists(wav_path):
         os.unlink(wav_path)
     command = [exe, "-hide_banner", "-nostdin", "-loglevel", "error", "-i", ts_path,
@@ -193,10 +193,10 @@ def decode_ffmpeg(exe, ts_path, sid, wav_path, timeline=None):
     lines = collections.deque(maxlen=TAIL_LINES)
 
     def fail(reason):
-        log(f"音声のデコードに失敗しました: {os.path.basename(ts_path)} / sid {result['sid']} / {reason}")
-        log("デコード: " + " ".join(command))
+        log(f"failed to decode audio: {os.path.basename(ts_path)} / sid {result['sid']} / {reason}")
+        log("decode: " + " ".join(command))
         if lines:
-            log(f"[ffmpeg] 出力の末尾{len(lines)}行:")
+            log(f"[ffmpeg] last {len(lines)} lines:")
             for text in lines:
                 log("[ffmpeg] " + text)
         raise DecodeError(reason)
@@ -205,25 +205,25 @@ def decode_ffmpeg(exe, ts_path, sid, wav_path, timeline=None):
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                    env=child_env())
     except OSError as error:
-        fail(f"ffmpegを起動できません: {error}")
+        fail(f"cannot start ffmpeg: {error}")
     for line in process.stdout:
         text = line.decode(CHILD_ENCODING, "replace").rstrip("\r\n")
         if text:
             lines.append(text)
     code = process.wait()
     if code != 0:
-        fail(f"ffmpegが終了コード{code}で終わりました")
+        fail(f"ffmpeg exited with code {code}")
     if not os.path.exists(wav_path):
-        fail("ffmpegがWAVを書きませんでした")
+        fail("ffmpeg did not write a WAV")
     try:
         align_wav(wav_path, info["audio_shift"], result["duration"])
     except DecodeError as error:
         fail(str(error))
     write_info(wav_path, result)
     result["seconds"] = round(time.monotonic() - began, 3)
-    log(f"音声をデコードしました: {os.path.basename(ts_path)} / sid {result['sid']} / "
-        f"長さ {result['duration']:.1f}秒 / 映像とのずれ {info['audio_shift']:+.3f}秒 / "
-        f"{result['seconds']:.1f}秒")
+    log(f"decoded audio: {os.path.basename(ts_path)} / sid {result['sid']} / "
+        f"duration {result['duration']:.1f}s / audio shift {info['audio_shift']:+.3f}s / "
+        f"{result['seconds']:.1f}s")
     return result
 
 

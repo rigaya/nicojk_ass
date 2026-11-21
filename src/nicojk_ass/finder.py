@@ -134,8 +134,8 @@ class Finder:
             self._find(sid, program_start, search_dirs, exclude)
         except Exception as error:  # 通信・応答の解析・TSの読み込みなど、どこで失敗しても戻る
             self.plan["error"] = str(error)
-            self.log(_PREFIX + "検索に失敗したため"
-                     + ("実況を付けません" if self.plan["target"]["comments"] == "unrelated" else "対象局のコメントを使います")
+            self.log(_PREFIX + "search failed, "
+                     + ("skipping live comments" if self.plan["target"]["comments"] == "unrelated" else "using the target channel's comments")
                      + f" ({error})")
         return self.plan
 
@@ -144,23 +144,23 @@ class Finder:
         plan["target"]["jk"] = services.get(sid)
         recorded = next((c for c in channels if c[1] == sid), None)
         if start is None or start <= 946684800:  # 2000-01-01
-            self.log(_PREFIX + "番組開始時刻がないため検索しません")
+            self.log(_PREFIX + "not searching because the program start time is missing")
             return
         if recorded is None:
-            self.log(_PREFIX + "対象局が局対応表にありません")
+            self.log(_PREFIX + "the target channel is not in the station table")
             return
         channel, _, name, reference = recorded
         plan["target"]["name"] = name
         target = self._find_broadcast(channel, start)
         if target is None:
-            self.log(_PREFIX + "開始時刻が10分以内の放送がありません")
+            self.log(_PREFIX + "no broadcast starts within 10 minutes")
             return
         tid = _int(target, "TID")
         count = target.findtext("Count")
         plan["program"] = {"tid": tid, "count": count, "title": None, "start": _item_start(target),
                            "end": parse_jst(target.findtext("EdTime"))}
         if not count:
-            self.log(_PREFIX + "話数がないため検索しません")
+            self.log(_PREFIX + "not searching because the episode number is missing")
             return
         broadcasts = self.client.load(f"ProgLookup&TID={tid}&Count={quote(count, safe='')}")
         if reference:
@@ -174,8 +174,8 @@ class Finder:
                 and abs(_item_start(item) - _item_start(target)) <= REFERENCE_TOLERANCE_SECONDS
                 for item in broadcasts.iter("ProgItem"))
             plan["target"]["comments"] = "ok" if simulcast else "unrelated"
-            self.log(_PREFIX + ("キー局の同じ回と開始差が5分以内の同時ネットです" if simulcast else
-                                "キー局の同じ回が開始差5分以内にないため遅れネット・独自枠と判断しました"))
+            self.log(_PREFIX + ("simulcast: the same episode is on a key station within 5 minutes" if simulcast else
+                                "treated as delayed or local because no key-station episode starts within 5 minutes"))
         candidates = self._select_candidates(broadcasts, target, channel, tid, count, sid)
         for item in candidates:
             ch = next(c for c in channels if c[0] == _int(item, "ChID") and c[3])
@@ -185,14 +185,14 @@ class Finder:
                 "same_time": abs(_item_start(item) - _item_start(target)) <= REFERENCE_TOLERANCE_SECONDS,
                 "recording": None})
         if not candidates:
-            self.log(_PREFIX + "実況のある別局の先行放送・同時刻の放送がありません")
+            self.log(_PREFIX + "no earlier or simultaneous broadcast with live comments on another channel")
             return
         title_xml = self.client.load(f"TitleLookup&TID={tid}", True)
         title_item = next(i for i in title_xml.iter("TitleItem") if _int(i, "TID") == tid)
         title = title_item.findtext("Title") or ""
         plan["program"]["title"] = title
         names = get_name_keys(title, title_item.findtext("ShortTitle") or "")
-        self.log(_PREFIX + f"{title} 第{count}話を特定しました")
+        self.log(_PREFIX + f"identified {title} episode {count}")
         self._find_recording(names, search_dirs, exclude)
 
     def _find_broadcast(self, channel, start):
@@ -251,12 +251,12 @@ class Finder:
         files = [p for p in self._list_files(search_dirs, exclude)
                  if any(key in normalize_name(os.path.splitext(os.path.basename(p))[0]) for key in names)]
         files.sort()
-        self.log(_PREFIX + f"作品名の鍵が一致する録画 {len(files)}ファイル")
+        self.log(_PREFIX + f"{len(files)} recordings match the title key")
         reads = 0
         probed = set()
         for limit in (FIRST_PASS_TS_FILES, None):
             for index, candidate in enumerate(plan["candidates"]):
-                self.log(_PREFIX + f"候補 {candidate['name']} {_format_jst(candidate['start'])}")
+                self.log(_PREFIX + f"candidate {candidate['name']} {_format_jst(candidate['start'])}")
                 ordered = sorted(files, key=lambda p: abs(os.path.getmtime(p) - candidate["end"]))
                 for path in (ordered if limit is None else ordered[:limit]):
                     try:
@@ -266,13 +266,13 @@ class Finder:
                     info = self._cached_info(path, stat)
                     if info is None:
                         if reads >= MAX_TS_FILES:
-                            self.log(_PREFIX + f"TS読み込みの上限{MAX_TS_FILES}ファイルに達しました")
+                            self.log(_PREFIX + f"reached the TS read limit of {MAX_TS_FILES} files")
                             return
                         reads += 1
                         try:
                             info = self._read_info(path, stat)
                         except Exception as error:
-                            self.log(_PREFIX + f"TS情報の読み込みに失敗: {path} ({error})")
+                            self.log(_PREFIX + f"failed to read TS info: {path} ({error})")
                             if (path, index) not in probed:
                                 probed.add((path, index))
                                 plan["probed"].append({"path": path, "sids": [], "eit_start": None,
@@ -292,7 +292,7 @@ class Finder:
                     if result == "match":
                         candidate["recording"] = path
                         plan["reference"] = {"path": path, "sid": candidate["sid"], "candidate": index}
-                        self.log(_PREFIX + f"基準録画 {path}")
+                        self.log(_PREFIX + f"reference recording {path}")
                         return
-                self.log(_PREFIX + "この候補の録画が見つかりません")
-        self.log(_PREFIX + "利用できる先行放送・同時刻の放送の録画がありません")
+                self.log(_PREFIX + "no recording found for this candidate")
+        self.log(_PREFIX + "no usable recording of an earlier or simultaneous broadcast")

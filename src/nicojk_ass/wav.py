@@ -28,7 +28,7 @@ def read_wav(path):
         with wave.open(str(path), "rb") as source:
             channels, width, rate = source.getnchannels(), source.getsampwidth(), source.getframerate()
             if source.getcomptype() != "NONE" or width not in (1, 2, 3, 4) or channels < 1 or rate <= 0:
-                raise ValueError(f"PCMのWAVではありません: {path}")
+                raise ValueError(f"not a PCM WAV: {path}")
             data = source.readframes(source.getnframes())
     except wave.Error as error:
         raise ValueError(f"cannot read WAV: {path}: {error}")

@@ -26,7 +26,7 @@ def run_danmaku2ass(xml_path, output_path, width, height,
                     font, fontsize, opacity, duration):
     """danmaku2ass.py をサブプロセスで実行する。"""
     if not os.path.isfile(DANMAKU2ASS_PATH):
-        log(f"danmaku2ass.py が見つかりません: {DANMAKU2ASS_PATH}")
+        log(f"danmaku2ass.py was not found: {DANMAKU2ASS_PATH}")
         raise NicoJKExit(EXIT_ERROR)
     cmd = [
         sys.executable, DANMAKU2ASS_PATH,
@@ -50,7 +50,7 @@ def run_danmaku2ass(xml_path, output_path, width, height,
     if output:
         print(output, end="", file=sys.stderr)
     if returncode != 0:
-        log(f"danmaku2ass が失敗しました (exit={returncode})")
+        log(f"danmaku2ass failed (exit={returncode})")
         raise NicoJKExit(EXIT_ERROR)
 
 

@@ -67,22 +67,22 @@ def parse_time(value):
                 if z != "Z":
                     zh, zm = int(z[1:3]), int(z[4:6])
                     if zh > 23 or zm > 59:
-                        raise ValueError("時差が不正です")
+                        raise ValueError("invalid timezone offset")
                     zone = (zh * 3600 + zm * 60) * (-1 if z[0] == "-" else 1)
     if match is not None:
         y, mo, d, h, mi, s = (int(match.group(i)) for i in range(1, 7))
         leap = y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)
         days = [31, 29 if leap else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
         if y < 1 or not 1 <= mo <= 12 or not 1 <= d <= days[mo - 1] or h > 23 or mi > 59 or s > 59:
-            raise ValueError("日時が不正です")
+            raise ValueError("invalid date and time")
         seconds = _days_from_civil(y, mo, d) * 86400 + h * 3600 + mi * 60 + s - zone
         return seconds if fraction == 0 else Decimal(seconds) + fraction
     try:
         number = Decimal(value)
     except InvalidOperation:
-        raise ValueError(f"時刻が不正です: {value}") from None
+        raise ValueError(f"invalid time: {value}") from None
     if not number.is_finite() or abs(number) >= Decimal(10) ** 12:
-        raise ValueError(f"時刻が不正です: {value}")
+        raise ValueError(f"invalid time: {value}")
     return int(number) if number == number.to_integral_value() else number
 
 
@@ -109,12 +109,12 @@ def fetch_comments_xml(channel, starttime, endtime, api_base):
                 data = resp.read().decode("utf-8")
         except urllib.error.HTTPError as e:
             if e.code in (400, 404):
-                log(f"チャンネル '{channel}' は存在しません (HTTP {e.code})")
+                log(f"channel '{channel}' does not exist (HTTP {e.code})")
                 raise NicoJKExit(EXIT_CHANNEL_NOT_FOUND)
-            log(f"HTTPエラー: {e}")
+            log(f"HTTP error: {e}")
             raise NicoJKExit(EXIT_ERROR)
         except urllib.error.URLError as e:
-            log(f"接続エラー: {e}")
+            log(f"connection error: {e}")
             raise NicoJKExit(EXIT_ERROR)
 
         segments.append(data)
@@ -143,10 +143,10 @@ def comment_time(chat):
     date = chat.get("date", "")
     usec = chat.get("date_usec", "0")
     if not re.fullmatch(r"-?\d+", date) or not re.fullmatch(r"\d+", usec):
-        raise ValueError("コメントのdate/date_usecが不正です")
+        raise ValueError("comment date/date_usec is invalid")
     microseconds = int(usec)
     if not 0 <= microseconds < 1000000:
-        raise ValueError("コメントのdate_usecが範囲外です")
+        raise ValueError("comment date_usec is out of range")
     return Decimal(date) + Decimal(microseconds) / Decimal(1000000)
 
 
@@ -181,9 +181,9 @@ def rebase_vpos(xml_str, starttime):
             chat.set("vpos", str(round((stamp - start) * 100)))
 
     if removed > 0:
-        log(f"vpos相対化: {removed}件の番組開始前コメントを除外")
+        log(f"vpos rebase: dropped {removed} comments from before the program start")
     if invalid > 0:
-        log(f"vpos相対化: date/date_usecが不正なコメントを{invalid}件除外")
+        log(f"vpos rebase: dropped {invalid} comments with invalid date/date_usec")
 
     return ET.tostring(root, encoding="unicode")
 
@@ -193,7 +193,7 @@ def fetch_api_comments(channel, starttime, endtime, api_base):
     取得は整数秒の範囲で行い、小数の指定のときだけ端数を追加で調整する。"""
     fetch_start, fetch_end = math.floor(starttime), math.ceil(endtime)
     xml_str = fetch_comments_xml(channel, fetch_start, fetch_end, api_base)
-    log(f"取得コメント数: {count_chats(xml_str)}件")
+    log(f"comments fetched: {count_chats(xml_str)}")
     xml_str = rebase_vpos(xml_str, fetch_start)
     if starttime != fetch_start or endtime != fetch_end:
         root = ET.fromstring(xml_str)
@@ -273,7 +273,7 @@ def rebase_file_vpos(root, starttime, endtime):
             if chat.get("no") is None:
                 chat.set("no", str(number))
     if removed:
-        log(f"範囲外のコメントを{removed}件除外")
+        log(f"dropped {removed} comments outside the range")
     if not root.findall("chat"):
         log("warning: 0 comments in range")
     return ET.tostring(root, encoding="unicode")

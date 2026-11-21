@@ -24,7 +24,7 @@ def apply_timemap(xml_str, timemap):
             continue
         position = float(chat.get("vpos")) / 100
         if not math.isfinite(position):
-            raise ValueError("コメントのvposが有限数ではありません")
+            raise ValueError("comment vpos is not a finite number")
         for reference_start, reference_end, target_start, target_end in timemap:
             if reference_start <= position < reference_end:
                 mapped = target_start + ((position - reference_start) * (target_end - target_start)
@@ -35,7 +35,7 @@ def apply_timemap(xml_str, timemap):
             root.remove(chat)
             removed += 1
     if removed:
-        log(f"対応表の範囲外のコメントを{removed}件除外")
+        log(f"dropped {removed} comments outside the time map")
     return ET.tostring(root, encoding="unicode")
 
 

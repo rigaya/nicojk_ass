@@ -296,7 +296,7 @@ class AffiliateTests(FinderTestCase):
                 plan = self.affiliate()
                 self.assertEqual(plan["target"]["comments"], "ok")
                 self.assertIsNone(plan["reference"])
-                self.assertTrue(any("同時" in line for line in f.logs))
+                self.assertTrue(any("simulcast" in line for line in f.logs))
 
     def test_遅れネットの録画があれば基準にし対象は無関係と判定する(self):
         f = self.f

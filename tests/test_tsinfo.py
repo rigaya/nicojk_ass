@@ -173,7 +173,7 @@ class TsInfoTests(unittest.TestCase):
         self.assertEqual(info.programs[0].genres, [])
 
     def test_すべてスクランブルされていてEITがなければエラー(self):
-        with self.assertRaisesRegex(tsinfo.TsInfoError, "スクランブル"):
+        with self.assertRaisesRegex(tsinfo.TsInfoError, "scrambled"):
             self.read(build([(1064, True)], self.START, scrambling=2, with_eit=False, with_tot=False))
 
     def test_映像がスクランブルされていてもEITとサービス情報があれば読める(self):

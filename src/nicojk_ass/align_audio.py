@@ -125,7 +125,7 @@ def align_audio(target8k, reference8k):
     target_duration = len(target8k) / SAMPLE_RATE
     target, reference = get_features(target8k), get_features(reference8k)
     if target.shape[1] < PROBE + STEP or reference.shape[1] < PROBE:
-        result["reason"] = "照合に必要な音声が短すぎます"
+        result["reason"] = "audio is too short to align"
         return result
 
     starts = reference.shape[1] - PROBE + 1
