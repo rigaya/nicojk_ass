@@ -9,7 +9,7 @@
 <rect x="204" y="108" width="190" height="60" rx="8" fill="#E8F8F2" stroke="#8FD6BF" stroke-width="1.5"/>
 <text x="299.0" y="125.0" text-anchor="middle" font-size="15" font-weight="bold" fill="#1F4D40">放送を特定</text>
 <text x="299.0" y="145.0" text-anchor="middle" font-size="12.5" fill="#4F7D70">しょぼいカレンダー</text>
-<text x="299.0" y="163.0" text-anchor="middle" font-size="12.5" fill="#4F7D70">先行・同時刻の別の局</text>
+<text x="299.0" y="163.0" text-anchor="middle" font-size="12.5" fill="#4F7D70">同じ回の別の局</text>
 <rect x="204" y="186" width="190" height="60" rx="8" fill="#E8F8F2" stroke="#8FD6BF" stroke-width="1.5"/>
 <text x="299.0" y="212.0" text-anchor="middle" font-size="15" font-weight="bold" fill="#1F4D40">録画を探す</text>
 <text x="299.0" y="232.0" text-anchor="middle" font-size="12.5" fill="#4F7D70">フォルダ --search-dir</text>
