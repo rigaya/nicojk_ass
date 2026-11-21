@@ -67,6 +67,8 @@ DEFAULT_PARAMS = {
     # (長い区間をまとめて推定すると2番目の山が育ち、一致が多くても山の比がmin_ratioを少し割ることがある)。
     "cm_span_ratio": 2.0,
     "cm_span_support": 15,
+    # 一致が少ない区間を、信頼できた区間のずれで写すときに許す推定値の差。
+    "cm_near_seconds": 5,
     # 信頼できなかった本編の区間を、信頼できた区間のずれ(または全体のずれ)で写すのに求める一致件数と、
     # そのとき一致を数える平滑化の半幅(5秒違いの候補を区別するため狭くする)。2件以下では10秒超の誤が急に増えた。
     "cm_fill_support": 3,
@@ -579,7 +581,7 @@ def find_segments_cm(target, index, center, target_start, target_duration, spans
     for row in rows:
         if row["ok"] or row["delta"] is None or row["ratio"] < params["min_ratio"] or row["support"] < 1:
             continue
-        near = [a for a in anchors if abs(a["delta"] - row["delta"]) <= params["merge_seconds"]]
+        near = [a for a in anchors if abs(a["delta"] - row["delta"]) <= params["cm_near_seconds"]]
         if near:
             row.update(delta=min(near, key=lambda a: abs(a["delta"] - row["delta"]))["delta"], ok=True, filled=True)
 

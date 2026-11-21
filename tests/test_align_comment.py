@@ -214,6 +214,37 @@ class EstimateTest(unittest.TestCase):
             if segment["start"] >= CM_START:
                 self.assertAlmostEqual(segment["delta"], OFFSET - (CM_TARGET - CM_REFERENCE), delta=1.0)
 
+    def test_find_segments_cm_near_seconds(self):
+        # テムパル#08のように、冒頭は11件中1件だけが一致して−6秒、後ろの2区間は−1秒と推定される。
+        target = [(TARGET_START + 27, "だれかー！")]
+        target += [(TARGET_START + 35 + i * 10, "対象の局だけの言葉" + chr(0x4e00 + i)) for i in range(10)]
+        reference = [(TARGET_START + 21, "だれかー！")]
+        for i, text in enumerate(["猫犬鳥魚", "空海山川", "森花雨雪", "風火水木", "金土日月", "星光影夢"]):
+            stamp = TARGET_START + 220 + (i // 3) * 250 + (i % 3) * 45
+            target.append((stamp, text))
+            reference.append((stamp - 1, text))
+        # 録画の範囲の外へ反応を足し、固有の言葉のIDFを本文の一致を数える下限より大きくする。
+        filler = [(TARGET_START + 1000 + i, "w") for i in range(300)]
+        params = dict(self.params, cm_edge_seconds=0, cm_tail_seconds=0)
+        vectors, index = align_comment.prepare(sorted(target + filler), sorted(reference + filler), params)
+        opening = [(s, w) for s, w in vectors if 6.1 <= s - TARGET_START < 153.1]
+        result = align_comment.estimate(opening, index, 0, dict(params, refine_smooth_seconds=params["cm_refine_smooth_seconds"]))
+        self.assertEqual(len(opening), 11)
+        self.assertEqual(result["delta"], -6.0)
+        self.assertGreaterEqual(result["ratio"], params["min_ratio"])
+        self.assertEqual(sum(align_comment.supports(s, w, index, result["delta"], params) for s, w in opening), 1)
+        spans = [(6.1, 153.1), (200.0, 400.0), (450.0, 650.0)]
+        for near, merge, filled in [(3, 3, False), (4.999, 10, False), (5, 3, True), (7, 3, True), (10, 3, True)]:
+            with self.subTest(cm_near_seconds=near, merge_seconds=merge):
+                segments, _ = align_comment.find_segments_cm(vectors, index, 0, TARGET_START, 650.0, spans,
+                    dict(params, cm_near_seconds=near, merge_seconds=merge))
+                self.assertEqual(len(segments), 3 if filled else 2)
+                self.assertTrue(all(s["delta"] == -1.0 for s in segments))
+                if filled:
+                    self.assertEqual((segments[0]["start"], segments[0]["end"]), spans[0])
+                    self.assertTrue(segments[0]["filled"])
+                    self.assertEqual(segments[0]["support"], 1)
+
     def test_enough_comments(self):
         params = dict(self.params, min_comments=30)
         self.assertTrue(align_comment.enough_comments([(0.0, "a")] * 30, [(0.0, "a")] * 30, params))
