@@ -87,6 +87,17 @@ class SyoboiTests(unittest.TestCase):
         self.assertEqual(len(self.urls), 3)
         self.assertTrue(self.urls[-1].endswith("ProgLookup&TID=1"))
 
+    def test_結果コード404を空の応答としてキャッシュする(self):
+        def fetch(url):
+            self.urls.append(url)
+            return "<ProgLookupResponse><Result><Code>404</Code></Result></ProgLookupResponse>"
+
+        for _ in range(2):
+            root = self.client(fetch).load("ProgLookup&ChID=20")
+            self.assertEqual(root.findall(".//ProgItem"), [])
+        self.assertEqual(len(self.urls), 1)
+        self.assertEqual(self.delays, [])
+
     def test_応答が正常でなければ例外にしてキャッシュしない(self):
         client = self.client(lambda url: "<R><Result><Code>500</Code></Result></R>")
         with self.assertRaises(OSError):

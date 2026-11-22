@@ -255,7 +255,8 @@ class AltFallbackTests(AltRunner):
 
     def test_放送を特定できなければ対象局のコメントだけ(self):
         self.f.range = programs()
-        code, converted, log, report = self.run_alt(self.search())
+        code, converted, log, report = self.run_alt([*self.search(), "--program-title=番組名"])
+        self.assertIn("no episode number in the program title", log)
         self.assertEqual(code, 0, log)
         self.assertEqual(report["alt"]["target"]["comments"], "unknown")
         self.assertEqual([chat.text for chat in converted[0][3]], ["jk151のコメント"])

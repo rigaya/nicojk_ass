@@ -3,10 +3,92 @@
 import os
 import threading
 import unittest
+import xml.etree.ElementTree as ET
 
-from finder_fixture import (EARLIER, TARGET, FinderTestCase, change_programs, jst, make_ts, program,
+from finder_fixture import (EARLIER, TARGET, FinderTestCase, change_programs, jst, jst_text, make_ts, program,
                             programs, title_response)
 from nicojk_ass import finder
+
+
+class FindByTitleTests(FinderTestCase):
+    def setUp(self):
+        super().setUp()
+        f = self.f
+        self.start = jst(2026, 11, 7, 8)
+        self.listed = jst(2026, 10, 31, 23)
+        self.earlier = jst(2026, 11, 1, 23)
+        self.original = program(8025, 20, "5", jst_text(self.listed))
+        self.schedule = [self.original]
+        self.reference = f.add_recording("薬屋のひとりごと #05.ts", 1064, self.earlier)
+        f.range = "<ProgLookupResponse><Result><Code>404</Code></Result></ProgLookupResponse>"
+        f.episodes = programs(self.original, program(8025, 6, "5", jst_text(self.earlier)))
+        f.title = title_response(8025, "薬屋のひとりごと(第3期)")
+        fetch = f.finder.client.fetch
+
+        def fetch_schedule(url):
+            if "Range=20261025_080000-20261120_080000" in url:
+                f.requests.append(url)
+                return programs(*self.schedule)
+            return fetch(url)
+
+        f.finder.client.fetch = fetch_schedule
+
+    def plan(self, title):
+        return self.f.finder.find(333, self.start, self.f.search_dirs(), program_title=title)
+
+    def test_番組名と全角の話数から別局の先行録画を見つける(self):
+        # 候補は番組表のAT-X初回より遅いが、対象のリピートより早い。まだ過去ログがなくても候補になる。
+        self.f.finder.now = lambda: self.earlier
+        plan = self.plan("[無]薬屋のひとりごと ＃０５ [字]")
+        self.assertTrue(plan["program"]["by_title"])
+        self.assertEqual(plan["program"]["start"], self.start)
+        self.assertEqual(plan["program"]["count"], "5")
+        self.assertEqual([c["sid"] for c in plan["candidates"]], [1064])
+        self.assertFalse(plan["candidates"][0]["same_time"])
+        self.assertEqual(plan["reference"]["path"], self.reference)
+        self.assertTrue(any("from the program title (listed on AT-X 2026-10-31 23:00:00)" in log
+                            for log in plan["log"]))
+        self.assertEqual(len(self.f.requests), 4)
+
+    def test_キー局の同時放送を録画時刻と比較する(self):
+        self.f.channels[2] = (20, 333, "AT-X", False)
+        self.f.services[333] = 5
+        self.f.episodes = programs(self.original, program(8025, 6, "5", jst_text(self.start)))
+        plan = self.plan("薬屋のひとりごと #5")
+        self.assertEqual(plan["target"]["comments"], "ok")
+        self.assertEqual(plan["candidates"], [])  # 同時刻で同じjk番号
+
+    def test_一致が複数なら番組時刻が近いものを選ぶ(self):
+        self.schedule += [program(8026, 20, "05", jst_text(self.start + 86400)),
+                          program(8030, 20, "5", jst_text(self.start + 3600)),
+                          program(8100, 20, "6", jst_text(self.start + 3600)),
+                          program(8200, 20, "5", jst_text(self.start - 3600))]
+        self.schedule[-1].find("Deleted").text = "1"
+        matching = ET.fromstring(title_response(8025, "薬屋のひとりごと(第3期)"))
+        for tid, title in ((8026, "薬屋のひとりごと 再放送"), (8030, "別作品")):
+            matching.find("TitleItems").append(ET.fromstring(title_response(tid, title)).find(".//TitleItem"))
+        self.f.title = ET.tostring(matching, encoding="unicode")
+        plan = self.plan("薬屋のひとりごと 第０５話")
+        self.assertEqual(plan["program"]["tid"], 8026)
+        self.assertTrue(any("TitleLookup&TID=8025,8026,8030" in url for url in self.f.requests))
+
+    def test_番組名なしや不一致なら基準探索を打ち切る(self):
+        for title, distance, requests, message in (
+                (None, 0, 1, "no broadcast starts within 10 minutes"),
+                ("薬屋のひとりごと", 0, 1, "no episode number in the program title"),
+                ("別番組 #05", 0, 3, "no broadcast of the same title and episode"),
+                ("薬屋のひとりごと #05", 13 * 86400 + 1, 2, "no broadcast of the same title and episode")):
+            with self.subTest(title=title, distance=distance):
+                self.setUp()
+                if distance:
+                    self.schedule = [program(8025, 20, "5", jst_text(self.start - distance))]
+                plan = self.plan(title)
+                self.assertIsNone(plan["error"])
+                self.assertIsNone(plan["program"])
+                self.assertEqual(plan["candidates"], [])
+                self.assertIsNone(plan["reference"])
+                self.assertTrue(any(message in log for log in plan["log"]))
+                self.assertEqual(len(self.f.requests), requests)
 
 
 class FindTests(FinderTestCase):

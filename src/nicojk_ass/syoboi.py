@@ -101,7 +101,7 @@ def _write_atomic(path, text):
 
 def check_result(root):
     code = root.find("Result/Code")
-    if code is None or (code.text or "").strip() != "200":
+    if code is None or (code.text or "").strip() not in ("200", "404"):
         raise OSError("the Syoboi calendar response is not valid")
 
 

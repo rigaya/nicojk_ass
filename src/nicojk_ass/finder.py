@@ -18,6 +18,7 @@ from .syoboi import SyoboiClient
 
 PLAN_SCHEMA = 1
 SEARCH_RANGE_MINUTES = 30
+TITLE_SEARCH_DAYS = 13
 TARGET_TOLERANCE_SECONDS = 10 * 60
 REFERENCE_TOLERANCE_SECONDS = 5 * 60
 # 過去ログAPIは5分ごとに集める(集めるのに3分ほどかかる)ので、あとの放送は終わってから10分たつまで使わない
@@ -127,7 +128,7 @@ class Finder:
             pass  # キャッシュに書けなくても探索は続ける
         return info
 
-    def find(self, sid, program_start, search_dirs, exclude=()):
+    def find(self, sid, program_start, search_dirs, exclude=(), program_title=None):
         """放送を特定して基準の候補を作り、録画を探す。planの辞書を返す。
         失敗してもplan["error"]に理由を書いて返す(例外は送出しない)。
         plan["reference"]に見つかった録画のパスとServiceIdが入る(なければNone)。"""
@@ -135,7 +136,7 @@ class Finder:
                      "target": {"sid": sid, "jk": None, "name": None, "comments": "unknown"},
                      "candidates": [], "probed": [], "reference": None, "error": None, "log": []}
         try:
-            self._find(sid, program_start, search_dirs, exclude)
+            self._find(sid, program_start, search_dirs, exclude, program_title)
         except Exception as error:  # 通信・応答の解析・TSの読み込みなど、どこで失敗しても戻る
             self.plan["error"] = str(error)
             self.log(_PREFIX + "search failed, "
@@ -143,7 +144,7 @@ class Finder:
                      + f" ({error})")
         return self.plan
 
-    def _find(self, sid, start, search_dirs, exclude):
+    def _find(self, sid, start, search_dirs, exclude, program_title):
         plan, channels, services = self.plan, self.channels, self.comment_services
         plan["target"]["jk"] = services.get(sid)
         recorded = next((c for c in channels if c[1] == sid), None)
@@ -156,13 +157,25 @@ class Finder:
         channel, _, name, reference = recorded
         plan["target"]["name"] = name
         target = self._find_broadcast(channel, start)
+        title_item = None
         if target is None:
             self.log(_PREFIX + "no broadcast starts within 10 minutes")
-            return
+            if not program_title:
+                return
+            target, title_item = self._find_by_title(channel, start, program_title)
+            if target is None:
+                return
         tid = _int(target, "TID")
         count = target.findtext("Count")
-        plan["program"] = {"tid": tid, "count": count, "title": None, "start": _item_start(target),
-                           "end": parse_jst(target.findtext("EdTime"))}
+        listed_start = _item_start(target)
+        listed_end = parse_jst(target.findtext("EdTime"))
+        plan["program"] = {"tid": tid, "count": count, "title": None, "start": listed_start, "end": listed_end}
+        target_start = start if title_item is not None else listed_start
+        if title_item is not None:
+            title = title_item.findtext("Title") or ""
+            plan["program"].update(by_title=True, title=title, start=start, end=start + listed_end - listed_start)
+            self.log(_PREFIX + f"identified {title} episode {count} from the program title "
+                     f"(listed on {name} {_format_jst(listed_start)})")
         if not count:
             self.log(_PREFIX + "not searching because the episode number is missing")
             return
@@ -175,28 +188,28 @@ class Finder:
             key_channels = {c[0] for c in channels if c[3] and services.get(c[1]) == target_jk}
             simulcast = any(
                 not _deleted(item) and _int(item, "ChID") in key_channels
-                and abs(_item_start(item) - _item_start(target)) <= REFERENCE_TOLERANCE_SECONDS
+                and abs(_item_start(item) - target_start) <= REFERENCE_TOLERANCE_SECONDS
                 for item in broadcasts.iter("ProgItem"))
             plan["target"]["comments"] = "ok" if simulcast else "unrelated"
             self.log(_PREFIX + ("simulcast: the same episode is on a key station within 5 minutes" if simulcast else
                                 "treated as delayed or local because no key-station episode starts within 5 minutes"))
-        candidates = self._select_candidates(broadcasts, target, channel, tid, count, sid)
+        candidates = self._select_candidates(broadcasts, target_start, channel, tid, count, sid)
         for item in candidates:
             ch = next(c for c in channels if c[0] == _int(item, "ChID") and c[3])
             plan["candidates"].append({
                 "sid": ch[1], "jk": services.get(ch[1]), "name": ch[2],
                 "start": _item_start(item), "end": parse_jst(item.findtext("EdTime")),
-                "same_time": abs(_item_start(item) - _item_start(target)) <= REFERENCE_TOLERANCE_SECONDS,
+                "same_time": abs(_item_start(item) - target_start) <= REFERENCE_TOLERANCE_SECONDS,
                 "recording": None})
         if not candidates:
             self.log(_PREFIX + "no other broadcast with live comments on another channel")
             return
-        title_xml = self.client.load(f"TitleLookup&TID={tid}", True)
-        title_item = next(i for i in title_xml.iter("TitleItem") if _int(i, "TID") == tid)
-        title = title_item.findtext("Title") or ""
-        plan["program"]["title"] = title
-        names = get_name_keys(title, title_item.findtext("ShortTitle") or "")
-        self.log(_PREFIX + f"identified {title} episode {count}")
+        if title_item is None:
+            title_xml = self.client.load(f"TitleLookup&TID={tid}", True)
+            title_item = next(i for i in title_xml.iter("TitleItem") if _int(i, "TID") == tid)
+            plan["program"]["title"] = title_item.findtext("Title") or ""
+            self.log(_PREFIX + f"identified {plan['program']['title']} episode {count}")
+        names = get_name_keys(plan["program"]["title"], title_item.findtext("ShortTitle") or "")
         self._find_recording(names, search_dirs, exclude)
 
     def _find_broadcast(self, channel, start):
@@ -211,8 +224,39 @@ class Finder:
                 nearest, target = difference, item
         return target
 
-    def _select_candidates(self, broadcasts, target, channel, tid, count, sid):
-        target_start = _item_start(target)
+    def _find_by_title(self, channel, start, program_title):
+        folded = unicodedata.normalize("NFKC", program_title)
+        match = re.search(r"#([0-9]+)|第([0-9]+)話", folded)
+        if not match:
+            self.log(_PREFIX + "no episode number in the program title")
+            return None, None
+        episode = int(match[1] or match[2])
+        seconds = TITLE_SEARCH_DAYS * 86400
+        span = f"{_format_range(start - seconds)}-{_format_range(start + seconds)}"
+        schedule = self.client.load(f"ProgLookup&ChID={channel}&Range={span}")
+        episodes = []
+        for item in schedule.iter("ProgItem"):
+            count = item.findtext("Count", "").strip()
+            if (not _deleted(item) and _int(item, "ChID") == channel and count.isdecimal()
+                    and int(count) == episode and abs(_item_start(item) - start) <= seconds):
+                episodes.append(item)
+        if episodes:
+            tids = ",".join(str(tid) for tid in sorted({_int(item, "TID") for item in episodes}))
+            titles = self.client.load(f"TitleLookup&TID={tids}", True)
+            normalized = normalize_name(folded)
+            matching = {
+                _int(item, "TID"): item for item in titles.iter("TitleItem")
+                if any(key in normalized for key in get_name_keys(
+                    item.findtext("Title") or "", item.findtext("ShortTitle") or ""))
+            }
+            for item in sorted(episodes, key=lambda item: abs(_item_start(item) - start)):
+                tid = _int(item, "TID")
+                if tid in matching:
+                    return item, matching[tid]
+        self.log(_PREFIX + f"no broadcast of the same title and episode on this channel within {TITLE_SEARCH_DAYS} days")
+        return None, None
+
+    def _select_candidates(self, broadcasts, target_start, channel, tid, count, sid):
         target_jk = self.comment_services.get(sid)
         candidates, later = [], []
         for item in broadcasts.iter("ProgItem"):

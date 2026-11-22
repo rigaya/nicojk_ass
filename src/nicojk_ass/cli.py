@@ -103,6 +103,7 @@ def build_parser():
     target.add_argument("--start", type=_time_arg, help="対象の録画の先頭の時刻")
     target.add_argument("--end", type=_time_arg, help="対象の録画の末尾の時刻")
     target.add_argument("--program-start", type=_time_arg, help="録画した放送の開始時刻(省略時は--start)")
+    target.add_argument("--program-title", help="録画した番組名(--altで時刻から特定できない場合に使う)")
     target.add_argument("--wav", help="対象の音声(PCMのWAV)。--ref-wavと一緒に使う")
     target.add_argument("--spans", help="本編の区間のJSON({\"spans\": [[開始, 終了], ...]}、対象の時刻での秒)。方式Dで使う")
     target.add_argument("--comments-file", help="ローカルのコメントファイル(XML/JKL)")
@@ -165,6 +166,7 @@ def build_parser():
     plan.add_argument("--start", required=True, type=_time_arg, help="対象の録画の先頭の時刻")
     plan.add_argument("--end", type=_time_arg, help="対象の録画の末尾の時刻")
     plan.add_argument("--program-start", type=_time_arg, help="録画した放送の開始時刻(省略時は--start)")
+    plan.add_argument("--program-title", help="録画した番組名(時刻から特定できない場合に使う)")
     plan.add_argument("--search-dir", action="append", default=[], metavar="DIR", help="録画を探すフォルダ(繰り返し可)")
     plan.add_argument("--exclude", action="append", default=[], metavar="FILE", help="探す対象から除くファイル(繰り返し可)")
     plan.add_argument("--cache-dir", help="キャッシュの置き場所")
@@ -396,7 +398,8 @@ def _alt_plan(args, cache_dir):
     """--altの放送の特定と録画の探索(decodeと照合はしない)。planの辞書を返す。"""
     program_start = args.program_start if args.program_start is not None else args.start
     finder = Finder(cache_dir, SyoboiClient(cache_dir, log=lambda m: log(m)), log=log)
-    return finder.find(args.sid, float(program_start), args.search_dir, args.exclude)
+    return finder.find(args.sid, float(program_start), args.search_dir, args.exclude,
+                       program_title=args.program_title)
 
 
 def _apply_ts_target(args, report, work):
@@ -788,10 +791,7 @@ def run_plan(args):
     """別の局の録画を探す処理だけを行い、結果をJSONで出す。終了コードは0(見つからなくても0)、エラーは1。"""
     if args.sid is None:
         log("warning: cannot identify the broadcast because --sid is missing")
-    program_start = args.program_start if args.program_start is not None else args.start
-    cache_dir = args.cache_dir or default_cache_dir()
-    finder = Finder(cache_dir, SyoboiClient(cache_dir, log=lambda m: log(m)), log=log)
-    plan = finder.find(args.sid, float(program_start), args.search_dir, args.exclude)
+    plan = _alt_plan(args, args.cache_dir or default_cache_dir())
     text = json.dumps(plan, ensure_ascii=False, indent=1)
     try:
         if args.report:
