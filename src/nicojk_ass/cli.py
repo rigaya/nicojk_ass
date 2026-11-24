@@ -20,7 +20,7 @@ from .finder import Finder
 from .render import (DEFAULT_DURATION, DEFAULT_FONT, DEFAULT_OPACITY, default_fontsize,
                      fixup_ass, run_danmaku2ass)
 from .syoboi import SyoboiClient, default_cache_dir
-from .timemap import apply_timemap, merge_comments, read_timemap
+from .timemap import apply_timemap, compose_timemaps, merge_comments, read_timemap
 
 REPORT_SCHEMA = 1
 
@@ -525,11 +525,6 @@ def _align_comments(args, report, spans):
     推定できなかったときと基準のコメントを取れないときは、対象の局のコメントだけを返す。"""
     start, end = _normalize(args.start), _normalize(args.end)
     program = args.program_start if args.program_start is not None else args.start
-    params = dict(align_comment.DEFAULT_PARAMS)
-    search = params["search_seconds"]
-    detail = {"cm": bool(spans), "segments": [], "seconds": 0, "candidates": []}
-    report["comment_align"] = detail
-
     jk, _ = _resolve_jk(args.sid, args.channel)
     if jk is None:
         log("the target channel has no live comments")
@@ -544,37 +539,46 @@ def _align_comments(args, report, spans):
         log(f"failed to read comments: {error}")
         raise NicoJKExit(EXIT_ERROR)
 
-    def fall_back(reason):
-        log(f"warning: comment alignment failed, using only the target channel's comments: {reason}")
-        detail["reason"] = reason
+    # --altの候補は放送の早い順。直接指定(--ref-sidなど)の候補は1つだけ。
+    candidates = getattr(args, "ref_candidates", None)
+    if candidates is None:
+        candidates = [{"sid": args.ref_sid, "start": args.ref_start, "end": args.ref_end}]
+    detail = report["comment_align"] = {}
+    result = _estimate_comment_map(args, detail, target_rows, start, end, program, spans, candidates)
+    if result is None:
+        log(f"warning: comment alignment failed, using only the target channel's comments: {detail['reason']}")
         report["source"] = "api"
         report["reference_fallback"] = True
         args.mode = "replace"
         return target_xml
+    timemap, reference_xml, candidate = result
+    args.ref_sid, args.ref_start, args.ref_end = candidate["sid"], candidate["start"], candidate["end"]
+    return _make_timemap(args, report, timemap, "comment_align", reference_xml, target_xml)
 
+
+def _estimate_comment_map(args, detail, target_rows, start, end, program, spans, candidates, strict=False):
+    """取得済みの対象コメントと、最初に十分なコメントが取れた候補を照合する。"""
+    params = align_comment.DEFAULT_PARAMS
+    search = params["search_seconds"]
+    detail.update(cm=bool(spans), segments=[], seconds=0, candidates=[])
     if len(target_rows) < params["min_comments"]:
-        # 対象の局のコメントが足りなければ、どの候補でも推定できないので基準のコメントを取りに行かない。
         detail["target_comments"] = len(target_rows)
-        return fall_back(f"too few comments on the target channel ({len(target_rows)})")
-    # --altでは、候補を放送の早い順に見て、基準のコメントが十分にある最初の候補で推定する。
-    # 直接指定(--ref-sidなど)の候補は1つだけ。
-    candidates = getattr(args, "ref_candidates", None)
-    if candidates is None:
-        candidates = [{"sid": args.ref_sid, "start": args.ref_start, "end": args.ref_end}]
+        detail["reason"] = f"too few comments on the target channel ({len(target_rows)})"
+        return None
     skipped = []
     reference_xml = None
     for candidate in candidates:
-        args.ref_sid, args.ref_start, args.ref_end = candidate["sid"], candidate["start"], candidate["end"]
-        ref_origin = _normalize(Decimal(str(args.ref_start)) - search)
-        ref_limit = _normalize(Decimal(str(args.ref_end)) + search)
-        entry = {"sid": args.ref_sid, "start": args.ref_start, "end": args.ref_end, "skipped": None}
+        sid, ref_start, ref_end = candidate["sid"], candidate["start"], candidate["end"]
+        ref_origin = _normalize(Decimal(str(ref_start)) - search)
+        ref_limit = _normalize(Decimal(str(ref_end)) + search)
+        entry = {"sid": sid, "start": ref_start, "end": ref_end, "skipped": None}
         detail["candidates"].append(entry)
         reason = None
         try:
             if args.ref_comments_file:
                 reference_xml = _read_file_comments(args.ref_comments_file, ref_origin, ref_limit)
             else:
-                ref_jk, _ = _resolve_jk(args.ref_sid, args.ref_channel)
+                ref_jk, _ = _resolve_jk(sid, args.ref_channel)
                 if ref_jk is None:
                     reason = "the reference channel has no live comments"
                 else:
@@ -592,12 +596,13 @@ def _align_comments(args, report, spans):
         skipped.append(reason)
         reference_xml = None
         if len(candidates) > 1:
-            log(f"method D: skipping candidate sid {args.ref_sid}: {reason}")
+            log(f"method D: skipping candidate sid {sid}: {reason}")
     if reference_xml is None:
-        return fall_back("; ".join(skipped))
-    center = float(args.ref_start) - float(program)
+        detail["reason"] = "; ".join(skipped)
+        return None
+    center = float(ref_start) - float(program)
     detail.update(center=center, target_comments=len(target_rows), reference_comments=len(reference_rows),
-                  reference={"sid": args.ref_sid, "start": args.ref_start, "end": args.ref_end})
+                  reference={"sid": sid, "start": ref_start, "end": ref_end})
 
     began = time.perf_counter()
     duration = float(end) - float(start)
@@ -609,7 +614,7 @@ def _align_comments(args, report, spans):
     # 対応表の基準の時刻は、取得範囲の先頭(ref_origin)からの秒。区間のずれもその原点に直す。
     shift = float(ref_origin) - float(start)
     timemap = align_comment.make_timemap([dict(part, delta=part["delta"] - shift) for part in found], duration,
-                                         float(ref_limit) - float(ref_origin), params["fill"])
+                                         float(ref_limit) - float(ref_origin), "strict" if strict else params["fill"])
     detail["seconds"] = round(time.perf_counter() - began, 3)
     detail["segments"] = [{"start": part["start"], "end": part["end"], "delta": part["delta"],
                            "ratio": part["ratio"], "support": part.get("support"), "windows": part.get("windows")}
@@ -620,8 +625,60 @@ def _align_comments(args, report, spans):
         log(f"comment alignment span: {part['start']:.3f}-{part['end']:.3f}s / reference-target {part['delta']:+.3f}s / "
             f"peak ratio {part['ratio']:.2f} / matches {part.get('support', 0)}")
     if not found or not timemap:
-        return fall_back("could not estimate a shift for any span")
-    return _make_timemap(args, report, timemap, "comment_align", reference_xml, target_xml)
+        detail["reason"] = "could not estimate a shift for any span"
+        return None
+    return timemap, reference_xml, candidate
+
+
+def _bridge_spans(segments, duration):
+    """音声の一致区間を間の録画の時刻に直し、重なりをつなぐ。"""
+    spans = sorted((max(0.0, part["start"] + part["delta"]),
+                    min(duration, part["end"] + part["delta"])) for part in segments)
+    merged = []
+    for begin, end in spans:
+        if begin >= end:
+            continue
+        if merged and begin <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+        else:
+            merged.append((begin, end))
+    return merged
+
+
+def _make_bridge(args, report, audio_map, recording_xml, start, end):
+    plan = report["alt"]
+    candidate = plan["bridge"]
+    detail = report["bridge"] = {"comment_align": {}}
+    alignment = detail["comment_align"]
+    segments = report["align"]["segments"]
+    duration = float(end) - float(start)
+    spans = _bridge_spans(segments, duration)
+    if spans:
+        log(f"bridge: aligning jk{candidate['jk']} to the reference recording")
+        try:
+            rows = align_comment.comments_from_xml(recording_xml, float(start), float(end))
+            program = plan["candidates"][plan["reference"]["candidate"]]["start"]
+            result = _estimate_comment_map(args, alignment, rows, start, end, program, spans, [candidate], strict=True)
+            if result is not None:
+                comment_map, xml, _ = result
+                # 先頭候補は音声の一致区間だけに写す。間の局のコメントは従来どおり補間する。
+                matched_audio = align_comment.make_timemap(segments, audio_map[-1][3], audio_map[-1][1], "strict")
+                combined = compose_timemaps(comment_map, matched_audio)
+                if combined:
+                    mapped = apply_timemap(xml, combined)
+                    detail.update(success=True, comments=count_chats(mapped))
+                    detail["fetch_start"] = _normalize(Decimal(str(candidate["start"]))
+                                                       - align_comment.DEFAULT_PARAMS["search_seconds"])
+                    detail["timemap"] = combined
+                    return mapped
+                alignment["reason"] = "the time maps do not overlap"
+        except (NicoJKExit, ET.ParseError, ValueError, TypeError, InvalidOperation) as error:
+            alignment["reason"] = str(error)
+    else:
+        alignment["reason"] = "no matched audio spans in the reference recording"
+    detail["success"] = False
+    log(f"warning: bridge comment alignment failed, keeping the reference recording's comments: {alignment['reason']}")
+    return None
 
 
 def _make_timemap(args, report, timemap, source="timemap", reference_xml=None, target_xml=None):
@@ -653,14 +710,13 @@ def _make_timemap(args, report, timemap, source="timemap", reference_xml=None, t
                            "file": args.ref_comments_file, "start": ref_start, "end": ref_end}
 
     try:
+        bridge_xml = None
+        if timemap and report.get("align", {}).get("success") and (report.get("alt") or {}).get("bridge", {}).get("use"):
+            bridge_xml = _make_bridge(args, report, timemap, xml_str, ref_start, ref_end)
         xml_str = apply_timemap(xml_str, timemap)
-        report["merged"] = False
-        if args.mode == "merge":
+        if args.mode == "merge" and target_xml is None:
             jk, _ = _resolve_jk(args.sid, args.channel)
-            if target_xml is not None:
-                xml_str = merge_comments(xml_str, target_xml, args.mark_reference_color)
-                report["merged"] = True
-            elif jk is None:
+            if jk is None:
                 log("warning: using only reference comments because the target channel has no live comments")
             else:
                 try:
@@ -671,9 +727,13 @@ def _make_timemap(args, report, timemap, source="timemap", reference_xml=None, t
                     if error.code != EXIT_CHANNEL_NOT_FOUND:
                         raise
                     log("warning: using only reference comments because the target channel is unsupported")
-                else:
-                    xml_str = merge_comments(xml_str, target_xml, args.mark_reference_color)
-                    report["merged"] = True
+        if args.mode != "merge":
+            target_xml = None
+        report["merged"] = target_xml is not None
+        if bridge_xml is not None:
+            xml_str = merge_comments(xml_str, target_xml, args.mark_reference_color, bridge_xml)
+        elif target_xml is not None:
+            xml_str = merge_comments(xml_str, target_xml, args.mark_reference_color)
     except (OSError, UnicodeError, ET.ParseError, ValueError, TypeError, InvalidOperation) as error:
         log(f"failed to convert and merge comments: {error}")
         raise NicoJKExit(EXIT_ERROR)

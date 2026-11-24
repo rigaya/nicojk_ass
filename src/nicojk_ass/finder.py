@@ -142,7 +142,27 @@ class Finder:
             self.log(_PREFIX + "search failed, "
                      + ("skipping live comments" if self.plan["target"]["comments"] == "unrelated" else "using the target channel's comments")
                      + f" ({error})")
+        self.plan["bridge"] = self._plan_bridge()
         return self.plan
+
+    def _plan_bridge(self):
+        candidates = self.plan["candidates"]
+        first = candidates[0] if candidates else None
+        bridge = {key: first[key] for key in ("sid", "jk", "name", "start", "end")} if first else {}
+        reference = self.plan["reference"]
+        if reference is None:
+            reason = "no reference recording"
+        elif reference["candidate"] == 0:
+            reason = "the first candidate has a recording"
+        else:
+            recording = candidates[reference["candidate"]]
+            if first["jk"] is None or recording["jk"] is None:
+                reason = "a channel has no live comments"
+            elif first["jk"] == recording["jk"] and abs(first["start"] - recording["start"]) <= REFERENCE_TOLERANCE_SECONDS:
+                reason = "both broadcasts use the same live comments"
+            else:
+                reason = None
+        return dict(bridge, use=reason is None, reason=reason)
 
     def _find(self, sid, start, search_dirs, exclude, program_title):
         plan, channels, services = self.plan, self.channels, self.comment_services

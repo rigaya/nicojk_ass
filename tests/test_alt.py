@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from finder_fixture import EARLIER, TARGET, Fixture, programs, program  # noqa: E402
-from nicojk_ass import cli, comments, decoder, finder, syoboi  # noqa: E402
+from nicojk_ass import cli, comments, decoder, finder, syoboi, timemap  # noqa: E402
 from test_nicojk_ass import MakeRunner  # noqa: E402
 
 if np is not None:
@@ -135,6 +135,8 @@ class AltFoundTests(AltRunner):
         self.assertEqual(report["decode"]["sid"], 1064)
         self.assertEqual(report["decode"]["start_rounded"], EARLIER)
         self.assertTrue(report["align"]["success"])
+        self.assertFalse(report["alt"]["bridge"]["use"])
+        self.assertNotIn("bridge", report)
         self.assertTrue(report["merged"])
         self.assertEqual(report["schema"], 1)
         # 成功したときは警告の行と1行の要約だけで、AMT [info]の行は出さない
@@ -431,6 +433,107 @@ class DecoderTests(AltRunner):
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(decoder.DecodeError):
             decoder.decode_amatsukaze(str(self.decoder), ts, 1064, str(wav))
 
+
+
+class BridgeMapTests(unittest.TestCase):
+    def test_対応表は途中の区間が重なる部分だけをつなぐ(self):
+        first = [(10, 20, 2, 22), (30, 34, 25, 29)]
+        second = [(4, 8, 1, 3), (16, 26, 10, 30)]
+        mapping = timemap.compose_timemaps(first, second)
+        self.assertEqual(mapping, [(11, 13, 1, 3), (17, 20, 10, 22), (30, 31, 28, 30)])
+        xml = '<packet><chat vpos="1100"/><chat vpos="1200"/><chat vpos="1300"/><chat vpos="1500"/></packet>'
+        self.assertEqual(timemap.apply_timemap(xml, mapping),
+                         '<packet><chat vpos="100" /><chat vpos="200" /></packet>')
+        self.assertEqual(timemap.compose_timemaps(first, [(29, 30, 0, 1)]), [])
+
+    def test_長さのない区間があっても落ちない(self):
+        self.assertEqual(timemap.compose_timemaps([(0, 1, 5, 5), (10, 20, 2, 22)], [(5, 5, 0, 0), (16, 26, 10, 30)]),
+                         [(17, 20, 10, 22)])
+
+    def test_間の録画の時刻に直して重なりをつなぐ(self):
+        segments = [{"start": 10, "end": 20, "delta": -15},
+                    {"start": 20, "end": 30, "delta": -16},
+                    {"start": 30, "end": 50, "delta": -10},
+                    {"start": 65, "end": 70, "delta": 0}]
+        self.assertEqual(cli._bridge_spans(segments, 35), [(0, 14), (20, 35)])
+
+
+@unittest.skipIf(np is None, "numpyがありません")
+class BridgeAltTests(AltRunner):
+    def setUp(self):
+        super().setUp()
+        self.prepare_wavs()
+        self.middle_start = EARLIER + 1800
+        self.middle = self.add_recording(sid=211, start=self.middle_start, spec={
+            "json": dict(REFERENCE_JSON, sid=211, start=self.middle_start - 0.4,
+                         start_rounded=self.middle_start, end=self.middle_start + 100)})
+        self.f.channels.append((128, 211, "BS11", True))
+        self.f.services[211] = 211
+        self.f.episodes = programs(
+            program(8028, 6, "2", "2026-10-10 23:30:00"),
+            program(8028, 128, "2", "2026-10-11 00:00:00"),
+            program(8028, 18, "2", "2026-10-11 01:00:00"))
+        self.middle_count = 30
+        self.fail_first = False
+
+    def api(self, channel, start, end, api_base):
+        self.api_calls.append((channel, start, end))
+        if channel == "jk5" and self.fail_first:
+            raise comments.NicoJKExit(1)
+        time, count = {"jk151": (TARGET + 5, 1), "jk211": (self.middle_start + 30, self.middle_count),
+                       "jk5": (EARLIER + 30, 30)}[channel]
+        return "<packet>" + "".join(f'<chat date="{time + i}" no="{i}">{channel}</chat>'
+                                    for i in range(count)) + "</packet>"
+
+    def test_音声で合った区間でコメントを照合して3局を統合する(self):
+        def match(vectors, index, center, start, duration, spans, params):
+            self.assertEqual((center, start, duration), (-1800, self.middle_start, 100))
+            self.assertAlmostEqual(spans[0][0], 10, delta=1)
+            return [{"start": 15, "end": 50, "delta": center, "ratio": 3.0}], []
+
+        spans_path = self.directory / "target_spans.json"
+        spans_path.write_text('{"spans": [[1, 2]]}', encoding="utf-8")
+        with mock.patch.object(cli.align_comment, "find_segments_cm", side_effect=match):
+            for mode in ("merge", "replace"):
+                with self.subTest(mode=mode):
+                    code, converted, log, report = self.run_alt([
+                        "--alt", mode, "--search-dir", self.f.root, "--mark-reference-color", "yellow",
+                        "--spans", str(spans_path)])
+                    self.assertEqual(code, 0, log)
+                    self.assertTrue(report["bridge"]["success"])
+                    self.assertTrue(report["bridge"]["comment_align"]["cm"])
+                    self.assertEqual(report["bridge"]["comments"], 20)
+                    chats = converted[0][3]
+                    first = {chat.text: (chat.get("vpos"), chat.get("mail")) for chat in reversed(chats)}
+                    expected = {"jk5": ("2000", "yellow"), "jk211": ("2000", "yellow")}
+                    if mode == "merge":
+                        expected["jk151"] = ("500", None)
+                    self.assertEqual(first, expected)
+                    channels = ["jk211", "jk5"] + (["jk151"] if mode == "merge" else [])
+                    self.assertEqual([call[0] for call in self.api_calls], channels)
+                    self.assertEqual(len(chats), 50 + (mode == "merge"))
+
+    def test_コメント照合に失敗したら従来の2局を使う(self):
+        for reason in ("too few comments", "could not fetch", "could not estimate"):
+            with self.subTest(reason=reason):
+                self.middle_count = 1 if reason == "too few comments" else 30
+                self.fail_first = reason == "could not fetch"
+                with mock.patch.object(cli.align_comment, "find_segments_cm", return_value=([], [])):
+                    code, converted, log, report = self.run_alt(self.search())
+                self.assertEqual(code, 0, log)
+                self.assertIn("bridge comment alignment failed", log)
+                self.assertIn(reason, report["bridge"]["comment_align"]["reason"])
+                self.assertFalse(report["bridge"]["success"])
+                self.assertEqual({chat.text for chat in converted[0][3]}, {"jk151", "jk211"})
+
+    def test_音声がないか照合に失敗したときは間の録画を使う照合をしない(self):
+        for wav in (False, True):
+            with self.subTest(wav=wav), mock.patch.object(cli, "_align_audio", return_value=None):
+                code, _, log, report = self.run_alt(self.search(), wav=wav)
+                self.assertEqual(code, 0, log)
+                self.assertTrue(report["alt"]["bridge"]["use"])
+                self.assertNotIn("bridge", report)
+                self.assertNotIn("jk211", [call[0] for call in self.api_calls])
 
 if __name__ == "__main__":
     unittest.main()

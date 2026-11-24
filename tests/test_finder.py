@@ -5,8 +5,8 @@ import threading
 import unittest
 import xml.etree.ElementTree as ET
 
-from finder_fixture import (EARLIER, TARGET, FinderTestCase, change_programs, jst, jst_text, make_ts, program,
-                            programs, title_response)
+from finder_fixture import (EARLIER, TARGET, FinderTestCase, Fixture, change_programs, jst, jst_text, make_ts,
+                            program, programs, title_response)
 from nicojk_ass import finder
 
 
@@ -509,6 +509,33 @@ class LaterBroadcastTests(FinderTestCase):
         reference = f.add_recording("ゾンビさがしてます_02_AT-X.ts", 333, self.ATX_START)
         plan = f.plan()
         self.assertEqual(plan["reference"], {"path": reference, "sid": 333, "candidate": 1})
+
+
+    def test_先頭候補から間の録画へコメントを写せる条件(self):
+        f = self.f
+        f.add_recording("ゾンビさがしてます_02_AT-X.ts", 333, self.ATX_START)
+        for first_jk, middle_jk, eligible in ((5, 333, True), (5, None, False), (None, 333, False), (5, 5, True)):
+            with self.subTest(first_jk=first_jk, middle_jk=middle_jk):
+                f.services[1064], f.services[333] = first_jk, middle_jk
+                plan = f.plan()
+                self.assertEqual(plan["bridge"]["sid"], 1064)
+                self.assertEqual(plan["bridge"]["start"], EARLIER)
+                self.assertEqual(plan["bridge"]["use"], eligible)
+        f.add_recording("ゾンビさがしてます_02_テレビ朝日.ts", 1064, EARLIER)
+        self.assertEqual(f.plan()["bridge"]["reason"], "the first candidate has a recording")
+
+    def test_同じjk番号で開始が5分以内なら同じコメントを使わない(self):
+        for difference, eligible in ((300, False), (301, True)):
+            with self.subTest(difference=difference, eligible=eligible):
+                f = Fixture(self)
+                f.services[333] = f.services[1064]
+                start = EARLIER + difference
+                f.episodes = programs(program(8028, 6, "2", jst_text(EARLIER)),
+                                      program(8028, 20, "2", jst_text(start)))
+                path = f.add_recording(f"ゾンビさがしてます_{difference}.ts", 333, start)
+                plan = f.plan()
+                self.assertEqual(plan["reference"]["path"], path)
+                self.assertEqual(plan["bridge"]["use"], eligible)
 
     def test_先の放送の録画があればあとの放送より優先する(self):
         f = self.f
