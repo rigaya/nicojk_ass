@@ -17,7 +17,7 @@
 
 ## exeをローカルで作る
 
-Python 3.10以上が要る。作業用のvenvを`build/`の下に作ってPyInstallerなどを入れ、単一のexeを`dist/`に作る(`dist/nicojk_ass(.exe)`)。できたexeで`--version`が版と合うことも確かめる。CIも同じスクリプトを呼ぶ。
+Python 3.11以上が要る。作業用のvenvを`build/`の下に作ってPyInstallerなどを入れ、単一のexeを`dist/`に作る(`dist/nicojk_ass(.exe)`)。できたexeで`--version`が版と合うことも確かめる。CIも同じスクリプトを呼ぶ。
 
 ```sh
 python3 packaging/build.py                      # Windowsでは python packaging\build.py

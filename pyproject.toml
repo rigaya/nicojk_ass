@@ -7,7 +7,7 @@ name = "nicojk_ass"
 dynamic = ["version"]
 description = "ニコニコ実況コメントのASS生成ツール"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 
 [project.scripts]
