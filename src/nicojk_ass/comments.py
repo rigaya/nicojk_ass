@@ -188,11 +188,19 @@ def rebase_vpos(xml_str, starttime):
     return ET.tostring(root, encoding="unicode")
 
 
-def fetch_api_comments(channel, starttime, endtime, api_base):
-    """APIから[starttime, endtime]のコメントを取得し、starttime基準のvposにして文字列で返す。
+def _fetch_comments_xml(channel, starttime, endtime, api_base, nicojk_log):
+    if nicojk_log is not None:
+        xml_str = nicojk_log.read(channel, starttime, endtime)
+        if xml_str is not None:
+            return xml_str
+    return fetch_comments_xml(channel, starttime, endtime, api_base)
+
+
+def fetch_api_comments(channel, starttime, endtime, api_base, *, nicojk_log=None):
+    """[starttime, endtime]のコメントを取得し、starttime基準のvposにして文字列で返す。
     取得は整数秒の範囲で行い、小数の指定のときだけ端数を追加で調整する。"""
     fetch_start, fetch_end = math.floor(starttime), math.ceil(endtime)
-    xml_str = fetch_comments_xml(channel, fetch_start, fetch_end, api_base)
+    xml_str = _fetch_comments_xml(channel, fetch_start, fetch_end, api_base, nicojk_log)
     log(f"comments fetched: {count_chats(xml_str)}")
     xml_str = rebase_vpos(xml_str, fetch_start)
     if starttime != fetch_start or endtime != fetch_end:
@@ -211,9 +219,9 @@ def fetch_api_comments(channel, starttime, endtime, api_base):
     return xml_str
 
 
-def fetch_target_comments(channel, starttime, endtime, api_base):
+def fetch_target_comments(channel, starttime, endtime, api_base, *, nicojk_log=None):
     """統合する対象の局のコメントを、整数秒の範囲で取得してstarttime基準のvposにする。"""
-    xml_str = fetch_comments_xml(channel, math.floor(starttime), math.ceil(endtime), api_base)
+    xml_str = _fetch_comments_xml(channel, math.floor(starttime), math.ceil(endtime), api_base, nicojk_log)
     return rebase_vpos(xml_str, starttime)
 
 

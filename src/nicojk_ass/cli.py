@@ -11,7 +11,7 @@ import time
 import xml.etree.ElementTree as ET
 from decimal import Decimal, InvalidOperation
 
-from . import __version__, align_comment, decoder, stations, tsinfo
+from . import __version__, align_comment, decoder, nicojk_log, stations, tsinfo
 from .comments import (DEFAULT_API_BASE, EXIT_CHANNEL_NOT_FOUND, EXIT_ERROR, EXIT_SUCCESS,
                        NicoJKExit, count_chats, fetch_api_comments, fetch_target_comments,
                        file_reference, format_server_comments, inspect_comments, log, parse_time,
@@ -106,6 +106,8 @@ def build_parser():
     target.add_argument("--program-title", help="録画した番組名(--altで時刻から特定できない場合に使う)")
     target.add_argument("--wav", help="対象の音声(PCMのWAV)。--ref-wavと一緒に使う")
     target.add_argument("--spans", help="本編の区間のJSON({\"spans\": [[開始, 終了], ...]}、対象の時刻での秒)。方式Dで使う")
+    target.add_argument("--prefer-nicojk-log", action="store_true",
+                        help="nicojk_ass.tomlに設定したNicoJKログを過去ログAPIより優先する")
     target.add_argument("--comments-file", help="ローカルのコメントファイル(XML/JKL)")
     target.add_argument("--comments-start", type=_time_arg,
                         help="コメントの時刻の基準(番組開始に当たる時刻。省略時は--program-start)")
@@ -284,7 +286,7 @@ def _read_file_comments(path, start, end):
 
 
 def _make_normal(args, report):
-    """対象の局のコメント(API)か、コメントファイルから取得する。"""
+    """対象の局のコメントを、明示されたファイル、NicoJKログ、過去ログAPIの順に探す。"""
     start, end = _normalize(args.start), _normalize(args.end)
     program = _normalize(args.program_start if args.program_start is not None else args.start)
     comments_start = args.comments_start
@@ -320,7 +322,8 @@ def _make_normal(args, report):
         report["reason"] = "no_channel"
         raise NicoJKExit(EXIT_CHANNEL_NOT_FOUND)
     channel_text = f"jk{jk}" if jk else "no jk"
-    log(f"comment source: {comments_file or 'API'} / {channel_text} / "
+    source = 'NicoJK log or API' if args.nicojk_log is not None else 'API'
+    log(f"comment source: {comments_file or source} / {channel_text} / "
         f"range {fetch_start} - {fetch_end} / program start {program} / "
         f"reference {reference} / offset {args.comments_offset}"
         + (" / aligning the start to the program start" if relative else ""))
@@ -330,7 +333,7 @@ def _make_normal(args, report):
                        "start": fetch_start, "end": fetch_end, "relative": relative}
     if comments_file:
         return _rebase_file_comments(root, fetch_start, fetch_end)
-    return fetch_api_comments(f"jk{jk}", fetch_start, fetch_end, args.api_url)
+    return fetch_api_comments(f"jk{jk}", fetch_start, fetch_end, args.api_url, nicojk_log=args.nicojk_log)
 
 
 def _align_audio(args, report):
@@ -530,8 +533,9 @@ def _align_comments(args, report, spans):
         log("the target channel has no live comments")
         report["reason"] = "no_channel"
         raise NicoJKExit(EXIT_CHANNEL_NOT_FOUND)
-    log(f"comment source: API / jk{jk} / range {start} - {end} / method D")
-    target_xml = fetch_api_comments(f"jk{jk}", start, end, args.api_url)
+    source = "NicoJK log or API" if args.nicojk_log is not None else "API"
+    log(f"comment source: {source} / jk{jk} / range {start} - {end} / method D")
+    target_xml = fetch_api_comments(f"jk{jk}", start, end, args.api_url, nicojk_log=args.nicojk_log)
     report["fetch"] = {"channel": f"jk{jk}", "file": None, "start": start, "end": end, "relative": False}
     try:
         target_rows = align_comment.comments_from_xml(target_xml, float(start), float(end))
@@ -582,7 +586,8 @@ def _estimate_comment_map(args, detail, target_rows, start, end, program, spans,
                 if ref_jk is None:
                     reason = "the reference channel has no live comments"
                 else:
-                    reference_xml = fetch_api_comments(f"jk{ref_jk}", ref_origin, ref_limit, args.api_url)
+                    reference_xml = fetch_api_comments(f"jk{ref_jk}", ref_origin, ref_limit, args.api_url,
+                                                       nicojk_log=args.nicojk_log)
             if reason is None:
                 reference_rows = align_comment.comments_from_xml(reference_xml, float(ref_origin), float(ref_limit))
                 entry["comments"] = len(reference_rows)
@@ -700,7 +705,8 @@ def _make_timemap(args, report, timemap, source="timemap", reference_xml=None, t
             log("warning: not using the reference because the reference channel has no live comments")
             return None
         try:
-            xml_str = fetch_api_comments(f"jk{ref_jk}", ref_start, ref_end, args.api_url)
+            xml_str = fetch_api_comments(f"jk{ref_jk}", ref_start, ref_end, args.api_url,
+                                         nicojk_log=args.nicojk_log)
         except (NicoJKExit, ET.ParseError, ValueError) as error:
             # 基準のコメントを取れないときは、ジョブを失敗させずに対象の局のコメントへ戻る。
             log(f"warning: not using the reference because its comments could not be fetched: {error}")
@@ -721,7 +727,7 @@ def _make_timemap(args, report, timemap, source="timemap", reference_xml=None, t
             else:
                 try:
                     target_xml = fetch_target_comments(f"jk{jk}", _normalize(args.start),
-                                                       _normalize(args.end), args.api_url)
+                                                       _normalize(args.end), args.api_url, nicojk_log=args.nicojk_log)
                 except NicoJKExit as error:
                     # API側の400/404でも基準のコメントは使い続ける。
                     if error.code != EXIT_CHANNEL_NOT_FOUND:
@@ -788,6 +794,14 @@ def _run_make(args, work):
     if args.comments_output:
         report["comments_output"] = args.comments_output
     try:
+        args.nicojk_log = None
+        if args.prefer_nicojk_log:
+            attempts = report["nicojk_log"] = []
+            try:
+                args.nicojk_log = nicojk_log.NicoJKLog(nicojk_log.load_dirs(), attempts)
+            except (OSError, ValueError) as error:
+                log(f"cannot read nicojk_ass.toml: {error}")
+                raise NicoJKExit(EXIT_ERROR) from error
         _apply_ts_target(args, report, work)
         spans = None
         if args.spans:

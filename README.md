@@ -40,7 +40,7 @@ nicojk_assの実行ファイルを配布しているのでこれを直接実行�
 
 ### nicojk_ass.py スクリプト実行の場合
 
-`nicojk_ass.py`を実行します。python 3.10以上が必要です。
+`nicojk_ass.py`を実行します。Python 3.11以上が必要です。
 
 音声で照合する(`--ref-wav`、`--ref-ts`、`--alt`、`align`)ときは追加でnumpyが必要です。
 
@@ -100,11 +100,25 @@ python3 nicojk_ass.py make --sid 211 --start 2026-11-19T21:00:00 --end 2026-11-1
 |---|---|
 | `--program-start T` | 録画した放送の開始時刻。省略時は録画の先頭 |
 | `--comments-start T` | (ファイルのみ)ファイルで番組開始に当たる時刻。省略時は`--program-start`。ファイルで省略すると、録画の範囲に半数以上のコメントが入っていれば番組開始、そうでなければ最初のコメントに合わせる(警告を出す) |
-| `--comments-file-auto` | (ファイルのみ)ファイルは自動で見つけた同名ファイル。コメントが1件もなければ警告し、`--sid`/`--channel`でAPIから取得する |
+| `--comments-file-auto` | (ファイルのみ)ファイルは自動で見つけた同名ファイル。コメントが1件もなければ警告し、`--sid`/`--channel`で通常の取得に切り替える |
 | `--comments-offset S` | 取得範囲を、ここで指定した秒数だけ前へずらす |
+| `--prefer-nicojk-log` | `nicojk_ass.toml`に指定したNicoJKログを過去ログAPIより優先する |
 | `--api-url URL` | (APIのみ)過去ログAPIのベースURL |
 
 ASSの時刻0は取得範囲の始まりです。取得範囲の始まりは`録画の先頭 + (--comments-start − --program-start) − --comments-offset`、長さは録画の長さになります。
+
+### NicoJKログを優先する
+
+`make --prefer-nicojk-log`を指定すると、実行ファイルまたは起動したスクリプトの隣にある`nicojk_ass.toml`を読みます。`dirs`には`jk1`などのチャンネル別フォルダを含むログのルートを指定します。相対パスはTOMLファイルのフォルダを基準にします。
+
+```toml
+[nicojk_log]
+dirs = ['C:\DTV\TVTest\Plugins\NicoJK', '/var/local/nicojk']
+```
+
+フォルダは記載順に探し、取得範囲内にコメントがあった最初のフォルダを使います。各フォルダの`.txt`と`.zip`内のログを時刻順に読み、同名のログはフォルダ直下の`.txt`を優先し、ZIP内だけで重複する場合は開始時刻が新しいZIPを使います。範囲内にコメントがなければ、警告を出して過去ログAPIから取得します。`--comments-file`や`--ref-comments-file`で指定したコメントファイルは引き続き優先されます。
+
+`--report`の`nicojk_log`には取得ごとに局、取得範囲、ログを使用したかどうか、使用したファイル名を記録します。
 
 ### 出力
 
