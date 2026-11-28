@@ -1,6 +1,9 @@
 import json
+import random
 import sys
+import xml.etree.ElementTree as ET
 import zipfile
+from codecs import BOM_UTF8
 from unittest import mock
 
 from test_nicojk_ass import MakeRunner, comments
@@ -46,9 +49,10 @@ class NicoJKLogTests(MakeRunner):
         self.log_file("first", START, chat(START, "基準局"), channel="jk1")
         old = self.log_file("second", START - 15, chat(START, "古いファイル"))
         first = self.log_file("second", START - 5, chat(START - 5, "範囲外")
-                              + chat(START, "開始") + chat(START + 4, "境界直前"))
-        second = self.log_file("second", START + 5, chat(START + 5, "境界")
-                               + chat(END, "末尾", 'no="42"') + chat(END + 1, "範囲外"))
+                              + chat(START, "開始", 'date_usec="0"')
+                              + chat(START + 4, "境界直前", 'date_usec="0"'))
+        second = self.log_file("second", START + 5, chat(START + 5, "境界", 'date_usec="0"')
+                               + chat(END, "末尾", 'no="42" date_usec="0"') + chat(END + 1, "範囲外"))
         code, chats, api, stderr, report = self.make()
         self.assertEqual(code, 0, stderr)
         api.assert_not_called()
@@ -58,6 +62,40 @@ class NicoJKLogTests(MakeRunner):
         self.assertEqual(report["nicojk_log"], [dict(channel="jk9", start=START, end=END,
                                                      used=True, files=[str(first), str(second)])])
         self.assertNotIn(str(old), stderr)
+
+    def test_BOMを外して非表示行を除きファイルをまたぐ重複を除く(self):
+        self.config_with_dirs("logs")
+        boundary = chat(START + 5, "境界", 'no=""')
+        self.log_file("logs", START, BOM_UTF8 + chat(START, "先頭", 'no=""')
+                      + chat(START - 1, "範囲外の注釈", 'abone="1"')
+                      + BOM_UTF8 + chat(START + 2, "番組名", 'abone="1" no=""')
+                      + boundary + boundary)
+        self.log_file("logs", START + 5, BOM_UTF8 + b"  " + boundary.rstrip() + b" \n"
+                      + chat(START + 5, "同じ秒の続き", 'abone="0"'))
+        code, chats, api, stderr, _ = self.make()
+        self.assertEqual(code, 0, stderr)
+        api.assert_not_called()
+        # 同じファイルにある同一行は残し、次のファイルとの重複だけを除く。
+        self.assertEqual([(entry.text, entry.get("no")) for entry in chats],
+                         [("先頭", "1"), ("境界", "2"), ("境界", "3"), ("同じ秒の続き", "4")])
+
+    def test_足りないマイクロ秒だけを秒ごとの乱数で再現可能に振る(self):
+        self.log_file("logs", START, chat(START, "一番目")
+                      + chat(START, "元の値", 'date_usec="250001" no="70"')
+                      + chat(START, "二番目") + chat(START, "三番目")
+                      + chat(START + 1, "次の秒"))
+        log = nicojk_log.NicoJKLog([self.directory / "logs"], [])
+        first = log.read("jk9", START, END)
+        self.assertEqual(log.read("jk9", START, END), first)
+        packet = list(ET.fromstring(first))
+        offsets = [int(packet[i].get("date_usec")) for i in (0, 2, 3)]
+        rng = random.Random(START)
+        self.assertEqual(offsets, sorted(rng.randrange(1000000) for _ in range(3)))
+        self.assertLessEqual(0, offsets[0])
+        self.assertLess(offsets[-1], 1000000)
+        self.assertEqual(packet[1].get("date_usec"), "250001")
+        self.assertEqual(packet[1].get("no"), "70")
+        self.assertEqual(int(packet[4].get("date_usec")), random.Random(START + 1).randrange(1000000))
 
     def test_壊れた行だけを捨てる(self):
         self.config_with_dirs("logs")

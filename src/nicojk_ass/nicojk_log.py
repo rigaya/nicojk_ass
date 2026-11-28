@@ -1,10 +1,12 @@
 """NicoJKの設定とローカルログを読み込む。"""
 
+import random
 import re
 import sys
 import tomllib
 import xml.etree.ElementTree as ET
 import zipfile
+from codecs import BOM_UTF8
 from itertools import groupby
 from pathlib import Path
 
@@ -66,14 +68,21 @@ class _LogReader:
         self.files = []
         self.number = 0
         self.invalid = 0
+        self.seen = {}
+        self.missing_usec = {}
 
     def read_lines(self, lines, name):
         self.files.append(str(name))
         for raw in lines:
+            raw = raw.removeprefix(BOM_UTF8).strip()
             if not raw.startswith(b"<chat "):
                 continue
+            opening = raw.partition(b">")[0]
+            # abone="1"はNicoJKが表示しない行(NicojCatchの番組名の行やNGにした行)。
+            if b' abone="1"' in opening:
+                continue
             # 開始タグのdateで範囲外と分かる行は、XMLとして解釈しない。
-            match = _CHAT_DATE.search(raw.partition(b">")[0])
+            match = _CHAT_DATE.search(opening)
             if match and not self.start <= int(match[1]) <= self.end:
                 self.number += 1
                 continue
@@ -84,11 +93,24 @@ class _LogReader:
             except (UnicodeError, ET.ParseError, ValueError):
                 self.invalid += 1
                 continue
+            if not self.start <= date <= self.end:
+                self.number += 1
+                continue
+            if self.seen.setdefault(raw, name) != name:
+                continue
             self.number += 1
-            if self.start <= date <= self.end:
-                if chat.get("no") is None:
-                    chat.set("no", str(self.number))
-                self.packet.append(chat)
+            if not chat.get("no"):
+                chat.set("no", str(self.number))
+            if chat.get("date_usec") is None:
+                self.missing_usec.setdefault(date, []).append(chat)
+            self.packet.append(chat)
+
+    def fill_missing_usec(self):
+        for date, chats in self.missing_usec.items():
+            rng = random.Random(date)
+            offsets = sorted(rng.randrange(1000000) for _ in chats)
+            for chat, usec in zip(chats, offsets):
+                chat.set("date_usec", str(usec))
 
 
 def _read_directory(directory, start, end):
@@ -144,6 +166,7 @@ class NicoJKLog:
             if reader.invalid:
                 log(f"warning: NicoJK log {directory / channel}: dropped {reader.invalid} invalid rows")
             if len(reader.packet):
+                reader.fill_missing_usec()
                 attempt.update(used=True, files=reader.files)
                 log(f"NicoJK log: {channel}: {len(reader.packet)} comments from {', '.join(reader.files)}")
                 return ET.tostring(reader.packet, encoding="unicode")
