@@ -473,6 +473,7 @@ class BridgeAltTests(AltRunner):
             program(8028, 6, "2", "2026-10-10 23:30:00"),
             program(8028, 128, "2", "2026-10-11 00:00:00"),
             program(8028, 18, "2", "2026-10-11 01:00:00"))
+        self.target_count = 1
         self.middle_count = 30
         self.fail_first = False
 
@@ -480,7 +481,7 @@ class BridgeAltTests(AltRunner):
         self.api_calls.append((channel, start, end))
         if channel == "jk5" and self.fail_first:
             raise comments.NicoJKExit(1)
-        time, count = {"jk151": (TARGET + 5, 1), "jk211": (self.middle_start + 30, self.middle_count),
+        time, count = {"jk151": (TARGET + 5, self.target_count), "jk211": (self.middle_start + 30, self.middle_count),
                        "jk5": (EARLIER + 30, 30)}[channel]
         return "<packet>" + "".join(f'<chat date="{time + i}" no="{i}">{channel}</chat>'
                                     for i in range(count)) + "</packet>"
@@ -525,6 +526,58 @@ class BridgeAltTests(AltRunner):
                 self.assertIn(reason, report["bridge"]["comment_align"]["reason"])
                 self.assertFalse(report["bridge"]["success"])
                 self.assertEqual({chat.text for chat in converted[0][3]}, {"jk151", "jk211"})
+
+    def test_間の局のコメントがないときは対象の局と先頭候補を直接照合する(self):
+        self.middle_count = 0
+        self.target_count = 30
+        spans_path = self.directory / "target_spans.json"
+        spans_path.write_text('{"spans": [[15, 50]]}', encoding="utf-8")
+
+        def match(vectors, index, center, start, duration, spans, params):
+            self.assertEqual((center, start, duration, spans), (EARLIER - TARGET - 2, TARGET, 90, [(15, 50)]))
+            return [{"start": 15, "end": 60, "delta": EARLIER - TARGET + 10, "ratio": 3.0}], []
+
+        with mock.patch.object(cli.align_comment, "find_segments_cm", side_effect=match):
+            for mode in ("merge", "replace"):
+                with self.subTest(mode=mode):
+                    code, converted, log, report = self.run_alt([
+                        "--alt", mode, "--search-dir", self.f.root, "--spans", str(spans_path),
+                        "--program-start", str(TARGET + 2), "--mark-reference-color", "yellow"])
+                    self.assertEqual(code, 0, log)
+                    self.assertFalse(report["bridge"]["success"])
+                    self.assertTrue(report["bridge"]["fallback"]["success"])
+                    self.assertTrue(report["bridge"]["fallback"]["cm"])
+                    self.assertEqual([call[0] for call in self.api_calls], ["jk211", "jk151", "jk5"])
+                    chats = converted[0][3]
+                    first = {c.text: (c.get("vpos"), c.get("mail")) for c in reversed(chats)}
+                    expected = {"jk5": ("2000", "yellow")}
+                    if mode == "merge":
+                        expected["jk151"] = ("500", None)
+                    self.assertEqual(first, expected)
+                    self.assertEqual(len(chats), 60 if mode == "merge" else 30)
+
+    def test_遅れネットは橋渡しに失敗しても対象の局と照合しない(self):
+        self.middle_count = 0
+        self.f.set_affiliate()
+        code, converted, log, report = self.run_alt(self.search(), sid=3088)
+        self.assertEqual(code, 0, log)
+        self.assertEqual(report["alt"]["target"]["comments"], "unrelated")
+        self.assertFalse(report["bridge"]["success"])
+        self.assertNotIn("fallback", report["bridge"])
+        self.assertEqual([call[0] for call in self.api_calls], ["jk211"])
+        self.assertEqual(converted[0][3], [])
+
+    def test_直接照合にも失敗したら従来の2局を使う(self):
+        self.middle_count = 1
+        self.target_count = 30
+        with mock.patch.object(cli.align_comment, "find_segments", return_value=([], [])):
+            code, converted, log, report = self.run_alt(self.search())
+        self.assertEqual(code, 0, log)
+        self.assertFalse(report["bridge"]["fallback"]["success"])
+        self.assertIn("could not estimate a shift", report["bridge"]["fallback"]["reason"])
+        self.assertEqual(log.count("warning: direct comment alignment failed"), 1)
+        self.assertEqual([call[0] for call in self.api_calls], ["jk211", "jk151", "jk5"])
+        self.assertEqual({c.text for c in converted[0][3]}, {"jk151", "jk211"})
 
     def test_音声がないか照合に失敗したときは間の録画を使う照合をしない(self):
         for wav in (False, True):

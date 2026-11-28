@@ -682,11 +682,26 @@ def _make_bridge(args, report, audio_map, recording_xml, start, end):
     else:
         alignment["reason"] = "no matched audio spans in the reference recording"
     detail["success"] = False
-    log(f"warning: bridge comment alignment failed, keeping the reference recording's comments: {alignment['reason']}")
+    log(f"warning: bridge comment alignment failed: {alignment['reason']}")
     return None
 
 
-def _make_timemap(args, report, timemap, source="timemap", reference_xml=None, target_xml=None):
+def _make_direct_bridge(args, detail, candidate, target_xml, start, end, spans):
+    """間の録画のコメントで照合できなければ、対象の局のコメントと直接照合する。"""
+    log(f"bridge fallback: aligning jk{candidate['jk']} directly to the target channel")
+    try:
+        rows = align_comment.comments_from_xml(target_xml, float(start), float(end))
+        program = args.program_start if args.program_start is not None else args.start
+        result = _estimate_comment_map(args, detail, rows, start, end, program, spans, [candidate])
+        if result is not None:
+            timemap, reference_xml, _ = result
+            return apply_timemap(reference_xml, timemap)
+    except (NicoJKExit, ET.ParseError, ValueError, TypeError, InvalidOperation) as error:
+        detail["reason"] = str(error)
+    return None
+
+
+def _make_timemap(args, report, timemap, source="timemap", reference_xml=None, target_xml=None, *, spans=None):
     """基準の局のコメントを対応表で対象の時刻へ写す。基準の局がなければNoneを返す。
     reference_xmlとtarget_xmlは、取得済みのものを渡すと取得しない(方式D)。"""
     ref_start, ref_end = _normalize(args.ref_start), _normalize(args.ref_end)
@@ -717,22 +732,43 @@ def _make_timemap(args, report, timemap, source="timemap", reference_xml=None, t
 
     try:
         bridge_xml = None
-        if timemap and report.get("align", {}).get("success") and (report.get("alt") or {}).get("bridge", {}).get("use"):
+        fallback = False
+        plan = report.get("alt") or {}
+        candidate = plan.get("bridge") or {}
+        if timemap and report.get("align", {}).get("success") and candidate.get("use"):
             bridge_xml = _make_bridge(args, report, timemap, xml_str, ref_start, ref_end)
+            fallback = bridge_xml is None and plan["target"]["comments"] != "unrelated"
         xml_str = apply_timemap(xml_str, timemap)
-        if args.mode == "merge" and target_xml is None:
+
+        start, end = _normalize(args.start), _normalize(args.end)
+        target_error = None
+        if (args.mode == "merge" or fallback) and target_xml is None:
             jk, _ = _resolve_jk(args.sid, args.channel)
             if jk is None:
-                log("warning: using only reference comments because the target channel has no live comments")
+                target_error = "the target channel has no live comments"
             else:
                 try:
-                    target_xml = fetch_target_comments(f"jk{jk}", _normalize(args.start),
-                                                       _normalize(args.end), args.api_url, nicojk_log=args.nicojk_log)
-                except NicoJKExit as error:
+                    target_xml = fetch_target_comments(f"jk{jk}", start, end, args.api_url, nicojk_log=args.nicojk_log)
+                except (NicoJKExit, ET.ParseError, ValueError) as error:
                     # API側の400/404でも基準のコメントは使い続ける。
-                    if error.code != EXIT_CHANNEL_NOT_FOUND:
+                    if isinstance(error, NicoJKExit) and error.code == EXIT_CHANNEL_NOT_FOUND:
+                        target_error = "the target channel is unsupported"
+                    elif fallback:
+                        target_error = f"could not fetch target channel comments: {error}"
+                    else:
                         raise
-                    log("warning: using only reference comments because the target channel is unsupported")
+
+        if fallback:
+            detail = report["bridge"]["fallback"] = {}
+            if target_error is None:
+                bridge_xml = _make_direct_bridge(args, detail, candidate, target_xml, start, end, spans)
+            else:
+                detail["reason"] = target_error
+            detail["success"] = bridge_xml is not None
+            if bridge_xml is None:
+                log(f"warning: direct comment alignment failed, keeping the reference recording's comments: {detail['reason']}")
+        elif target_error is not None:
+            log(f"warning: using only reference comments because {target_error}")
         if args.mode != "merge":
             target_xml = None
         report["merged"] = target_xml is not None
@@ -830,7 +866,7 @@ def _run_make(args, work):
             elif method == "comment":
                 xml_str = _align_comments(args, report, spans)
         if timemap is not None:
-            xml_str = _make_timemap(args, report, timemap)
+            xml_str = _make_timemap(args, report, timemap, spans=spans)
         if xml_str is None:
             if (report.get("alt") or {}).get("target", {}).get("comments") == "unrelated":
                 # 遅れネット・独自枠で基準を使えないとき、対象の局のコメントは別の番組のものなので付けない。
