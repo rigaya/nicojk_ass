@@ -686,13 +686,13 @@ def _make_bridge(args, report, audio_map, recording_xml, start, end):
     return None
 
 
-def _make_direct_bridge(args, detail, candidate, target_xml, start, end, spans):
-    """間の録画のコメントで照合できなければ、対象の局のコメントと直接照合する。"""
-    log(f"bridge fallback: aligning jk{candidate['jk']} directly to the target channel")
+def _make_direct_bridge(args, detail, candidates, target_xml, start, end, spans):
+    """間の録画のコメントで照合できなければ、録画のない候補を早い順に対象の局のコメントと直接照合する。"""
+    log("bridge fallback: aligning the other candidates directly to the target channel")
     try:
         rows = align_comment.comments_from_xml(target_xml, float(start), float(end))
         program = args.program_start if args.program_start is not None else args.start
-        result = _estimate_comment_map(args, detail, rows, start, end, program, spans, [candidate])
+        result = _estimate_comment_map(args, detail, rows, start, end, program, spans, candidates)
         if result is not None:
             timemap, reference_xml, _ = result
             return apply_timemap(reference_xml, timemap)
@@ -761,7 +761,9 @@ def _make_timemap(args, report, timemap, source="timemap", reference_xml=None, t
         if fallback:
             detail = report["bridge"]["fallback"] = {}
             if target_error is None:
-                bridge_xml = _make_direct_bridge(args, detail, candidate, target_xml, start, end, spans)
+                # 録画の放送のコメントは音声で写してあるので、ほかの候補だけを照合する。
+                others = [c for i, c in enumerate(plan["candidates"]) if i != plan["reference"]["candidate"]]
+                bridge_xml = _make_direct_bridge(args, detail, others, target_xml, start, end, spans)
             else:
                 detail["reason"] = target_error
             detail["success"] = bridge_xml is not None

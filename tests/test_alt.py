@@ -482,7 +482,7 @@ class BridgeAltTests(AltRunner):
         if channel == "jk5" and self.fail_first:
             raise comments.NicoJKExit(1)
         time, count = {"jk151": (TARGET + 5, self.target_count), "jk211": (self.middle_start + 30, self.middle_count),
-                       "jk5": (EARLIER + 30, 30)}[channel]
+                       "jk5": (EARLIER + 30, 30), "jk1": (EARLIER - 1770, 0)}[channel]
         return "<packet>" + "".join(f'<chat date="{time + i}" no="{i}">{channel}</chat>'
                                     for i in range(count)) + "</packet>"
 
@@ -566,6 +566,29 @@ class BridgeAltTests(AltRunner):
         self.assertNotIn("fallback", report["bridge"])
         self.assertEqual([call[0] for call in self.api_calls], ["jk211"])
         self.assertEqual(converted[0][3], [])
+
+    def test_先頭候補のコメントが少なければ次の録画のない候補と直接照合する(self):
+        self.middle_count = 30
+        self.target_count = 30
+        self.f.channels.append((1, 1024, "NHK総合", True))
+        self.f.services[1024] = 1
+        self.f.episodes = programs(
+            program(8028, 1, "2", "2026-10-10 23:00:00"),
+            program(8028, 6, "2", "2026-10-10 23:30:00"),
+            program(8028, 128, "2", "2026-10-11 00:00:00"),
+            program(8028, 18, "2", "2026-10-11 01:00:00"))
+        found = [{"start": 15, "end": 60, "delta": EARLIER - TARGET + 10, "ratio": 3.0}]
+        with mock.patch.object(cli.align_comment, "find_segments", return_value=(found, [])):
+            code, converted, log, report = self.run_alt(self.search())
+        self.assertEqual(code, 0, log)
+        self.assertEqual(report["alt"]["bridge"]["sid"], 1024)
+        self.assertFalse(report["bridge"]["success"])
+        fallback = report["bridge"]["fallback"]
+        self.assertTrue(fallback["success"])
+        self.assertEqual([c["sid"] for c in fallback["candidates"]], [1024, 1064])
+        self.assertEqual(fallback["reference"]["sid"], 1064)
+        self.assertEqual([call[0] for call in self.api_calls], ["jk211", "jk1", "jk151", "jk1", "jk5"])
+        self.assertEqual({c.text for c in converted[0][3]}, {"jk151", "jk211", "jk5"})
 
     def test_直接照合にも失敗したら従来の2局を使う(self):
         self.middle_count = 1
